@@ -9,7 +9,7 @@ from sqlalchemy import String
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 
-from app.enums.timeframe import TimeFrame
+from app.enums.types import TimeFrame
 from app.models.base import Base
 
 
