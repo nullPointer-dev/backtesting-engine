@@ -8,7 +8,7 @@ from app.models.market_data import (
     MarketData
 )
 
-from app.enums.timeframe import (
+from app.enums.types import (
     TimeFrame
 )
 
