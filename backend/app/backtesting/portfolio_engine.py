@@ -55,9 +55,9 @@ class PortfolioEngine:
                 raise ValueError("Quantity must be provided for FIXED_QUANTITY position sizing type")
             return float(self.quantity)
 
-        if (self.position_sizing_type == PositionSizingType.FIXED_PERCENTAGE):
+        if (self.position_sizing_type == PositionSizingType.PERCENT_OF_CAPITAL):
             if self.position_size_percent is None:
-                raise ValueError("Position size percent must be provided for FIXED_PERCENTAGE position sizing type")
+                raise ValueError("Position size percent must be provided for PERCENT_OF_CAPITAL position sizing type")
 
             capital_to_use = (self.current_capital * (self.position_size_percent / 100))
             return (capital_to_use / trade["entry_price"])
