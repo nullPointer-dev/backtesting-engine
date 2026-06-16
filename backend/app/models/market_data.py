@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime
+from sqlalchemy import DateTime, Enum
 from sqlalchemy import Double
 from sqlalchemy import String
-
-from sqlalchemy.dialects.postgresql import ENUM
 
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
@@ -29,8 +27,9 @@ class MarketData(Base):
     )
 
     timeframe: Mapped[TimeFrame] = mapped_column(
-        ENUM(
+        Enum(
             TimeFrame,
+            values_callable=lambda x: [e.value for e in x],
             name="timeframe_type",
             create_type=False
         ),
