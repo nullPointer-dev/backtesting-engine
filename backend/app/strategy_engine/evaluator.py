@@ -7,6 +7,7 @@ from app.strategy_engine.schemas.operand import (
     PriceOperand,
     ValueOperand
 )
+import pandas as pd
 
 
 class Evaluator:
@@ -72,7 +73,12 @@ class Evaluator:
                 operand.params
             )
 
-            return series.iloc[index]
+            value = series.iloc[index]
+
+            if pd.isna(value):
+                return None
+
+            return value
 
         raise ValueError(
             "Unknown operand type"
