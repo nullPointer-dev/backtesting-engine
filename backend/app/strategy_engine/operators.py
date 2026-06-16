@@ -8,6 +8,8 @@ def evaluate_operator(
     left_previous=None,
     right_previous=None
 ):
+    if (left_current is None or right_current is None):
+        return False
 
     if operator == ComparisonOperator.GT:
         return left_current > right_current
@@ -28,12 +30,16 @@ def evaluate_operator(
         return left_current != right_current
 
     if operator == ComparisonOperator.CROSSES_ABOVE:
+        if (left_previous is None or right_previous is None):
+            return False
         return (
             left_previous <= right_previous
             and left_current > right_current
         )
 
     if operator == ComparisonOperator.CROSSES_BELOW:
+        if (left_previous is None or right_previous is None):
+            return False
         return (
             left_previous >= right_previous
             and left_current < right_current
