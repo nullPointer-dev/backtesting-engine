@@ -53,6 +53,9 @@ class BacktestRunner:
                     indicator_cache=indicator_cache).run()
             )
 
+            print("Rows:", len(dataframe))
+            print("Trades generated:", len(raw_trades))
+
             portfolio_result = (
                 PortfolioEngine(
                     initial_capital=backtest.initial_capital,
