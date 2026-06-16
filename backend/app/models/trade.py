@@ -6,14 +6,14 @@ from sqlalchemy import DateTime
 from sqlalchemy import Double
 from sqlalchemy import ForeignKey
 from sqlalchemy import String
-
+from sqlalchemy import Integer
 from sqlalchemy.dialects.postgresql import ENUM
 
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
 
-from app.enums.trade_side import TradeSide
+from app.enums.types import PositionSide
 from app.models.base import Base
 
 
@@ -38,9 +38,9 @@ class Trade(Base):
         nullable=False
     )
 
-    side: Mapped[TradeSide] = mapped_column(
+    side: Mapped[PositionSide] = mapped_column(
         ENUM(
-            TradeSide,
+            PositionSide,
             name="trade_side",
             create_type=False
         ),
@@ -67,6 +67,11 @@ class Trade(Base):
 
     quantity: Mapped[float] = mapped_column(
         Double,
+        nullable=False
+    )
+
+    duration_bars: Mapped[int] = mapped_column(
+        Integer,
         nullable=False
     )
 
