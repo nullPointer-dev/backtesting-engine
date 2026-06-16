@@ -1,3 +1,8 @@
-from app.enums.trade_side import TradeSide
-from app.enums.backtest_status import BacktestStatus
-from app.enums.timeframe import TimeFrame
+from app.enums.types import (
+    ComparisonOperator,
+    LogicalOperator,
+    PositionSide,   
+    PositionSizingType,
+    TimeFrame,
+    BacktestStatus
+)
