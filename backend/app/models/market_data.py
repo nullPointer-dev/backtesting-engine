@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Enum
 from sqlalchemy import Double
 from sqlalchemy import String
+from sqlalchemy import UniqueConstraint
 
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
@@ -16,6 +17,15 @@ from app.models.base import Base
 class MarketData(Base):
 
     __tablename__ = "market_data"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol",
+            "timeframe",
+            "datetime",
+            name="unique_market_data"
+        ),
+    )
 
     market_data_id: Mapped[int] = mapped_column(
         primary_key=True
@@ -30,8 +40,7 @@ class MarketData(Base):
         Enum(
             TimeFrame,
             values_callable=lambda x: [e.value for e in x],
-            name="timeframe_type",
-            create_type=False
+            name="timeframe_type"
         ),
         nullable=False
     )

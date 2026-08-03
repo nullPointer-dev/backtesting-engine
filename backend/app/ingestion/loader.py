@@ -113,8 +113,15 @@ def load_market_data(
 
         statement = (
             statement
-            .on_conflict_do_nothing(
-                constraint="unique_market_data"
+            .on_conflict_do_update(
+                constraint="unique_market_data",
+                set_={
+                    "open": statement.excluded.open,
+                    "high": statement.excluded.high,
+                    "low": statement.excluded.low,
+                    "close": statement.excluded.close,
+                    "volume": statement.excluded.volume
+                }
             )
         )
 

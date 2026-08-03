@@ -41,8 +41,7 @@ class Trade(Base):
     side: Mapped[PositionSide] = mapped_column(
         ENUM(
             PositionSide,
-            name="trade_side",
-            create_type=False
+            name="trade_side"
         ),
         nullable=False
     )

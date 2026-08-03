@@ -35,8 +35,7 @@ class Backtest(Base):
     status: Mapped[BacktestStatus] = mapped_column(
         ENUM(
             BacktestStatus,
-            name="backtest_status",
-            create_type=False
+            name="backtest_status"
         ),
         nullable=False
     )
@@ -57,8 +56,7 @@ class Backtest(Base):
         ENUM(
             TimeFrame,
             values_callable=lambda x: [e.value for e in x],
-            name="timeframe_type",
-            create_type=False
+            name="timeframe_type"
         ),
         nullable=False
     )
@@ -68,8 +66,7 @@ class Backtest(Base):
     ] = mapped_column(
         ENUM(
             PositionSizingType,
-            name="position_sizing_type",
-            create_type=False
+            name="position_sizing_type"
         ),
         nullable=False
     )
