@@ -1,5 +1,5 @@
 import pandas as pd
-
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.database import SessionLocal
@@ -17,10 +17,10 @@ def load_market_data(
     dataframe: pd.DataFrame,
     symbol: str,
     timeframe: str
-):
+) -> int:
 
     if dataframe.empty:
-        return
+        return 0
 
     dataframe = dataframe.reset_index()
 
@@ -57,7 +57,7 @@ def load_market_data(
     )
 
     if dataframe.empty:
-        return
+        return 0
 
     dataframe["symbol"] = symbol
     dataframe["timeframe"] = timeframe
@@ -104,6 +104,12 @@ def load_market_data(
     session = SessionLocal()
 
     try:
+        count_before = session.scalar(
+            select(func.count())
+            .select_from(MarketData)
+            .where(MarketData.symbol == symbol)
+            .where(MarketData.timeframe == TimeFrame(timeframe))
+        )
 
         statement = insert(
             MarketData
@@ -131,6 +137,45 @@ def load_market_data(
 
         session.commit()
 
+        count_after = session.scalar(
+            select(func.count())
+            .select_from(MarketData)
+            .where(MarketData.symbol == symbol)
+            .where(MarketData.timeframe == TimeFrame(timeframe))
+        )
+
+        return max(0, count_after - count_before)
+
     finally:
 
+        session.close()
+
+
+def delete_oldest_rows(
+    symbol: str,
+    timeframe: str,
+    count: int
+):
+    if count <= 0:
+        return
+
+    session = SessionLocal()
+
+    try:
+        subquery = (
+            select(MarketData.market_data_id)
+            .where(MarketData.symbol == symbol)
+            .where(MarketData.timeframe == TimeFrame(timeframe))
+            .order_by(MarketData.datetime.asc())
+            .limit(count)
+        )
+
+        stmt = delete(MarketData).where(
+            MarketData.market_data_id.in_(subquery)
+        )
+
+        session.execute(stmt)
+        session.commit()
+
+    finally:
         session.close()

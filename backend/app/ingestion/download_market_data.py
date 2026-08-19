@@ -14,7 +14,8 @@ from app.ingestion.yfinance_client import (
 )
 
 from app.ingestion.loader import (
-    load_market_data
+    load_market_data,
+    delete_oldest_rows
 )
 
 from app.models.market_data import (
@@ -30,7 +31,7 @@ def download_and_store(
     symbol: str,
     timeframe: str,
     start: str | None = None
-):
+) -> int:
 
     dataframe = fetch_data(
         symbol=symbol,
@@ -44,13 +45,15 @@ def download_and_store(
             f"    No data available"
         )
 
-        return
+        return 0
 
-    load_market_data(
+    inserted_count = load_market_data(
         dataframe=dataframe,
         symbol=symbol,
         timeframe=timeframe
     )
+
+    return inserted_count
 
 
 def latest_datetime(
@@ -142,7 +145,7 @@ def incremental_update():
 
                 if last is None:
 
-                    download_and_store(
+                    inserted = download_and_store(
                         symbol=symbol,
                         timeframe=timeframe
                     )
@@ -153,11 +156,15 @@ def incremental_update():
                         last - timedelta(days=2)
                     ).date().isoformat()
 
-                    download_and_store(
+                    inserted = download_and_store(
                         symbol=symbol,
                         timeframe=timeframe,
                         start=start
                     )
+
+                if inserted > 0:
+                    delete_oldest_rows(symbol, timeframe, inserted)
+                    print(f"    Inserted {inserted} new rows, deleted {inserted} oldest rows")
 
                 print(
                     f"[OK] {timeframe}"
