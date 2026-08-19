@@ -40,6 +40,11 @@ class Backtest(Base):
         nullable=False
     )
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False
+    )
+
     start_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     end_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
