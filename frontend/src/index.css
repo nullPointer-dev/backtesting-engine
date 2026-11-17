@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+/* Design tokens from the "Backtesting Engine Dashboard" canvas. */
+@theme {
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: var(--font-mono);
+
+  --color-canvas: #0b0e13;      /* page background */
+  --color-raised: #0f131a;      /* marketing / sign-in side panel */
+  --color-panel: #12161d;       /* cards, sidebar, tables */
+  --color-row-hover: #171c25;
+  --color-panel-2: #1b212b;     /* active nav, neutral chips, row rules */
+  --color-line: #232a35;        /* panel borders */
+  --color-line-strong: #2f3846; /* inputs, secondary buttons */
+
+  --color-ink: #e6eaf0;         /* primary text, primary button */
+  --color-ink-2: #c9d1dc;       /* code */
+  --color-muted: #a3adbb;       /* secondary text */
+  --color-subtle: #8892a0;      /* labels, captions */
+
+  --color-gain: #36d6b0;        /* positive values, COMPLETED */
+  --color-loss: #ff8a4c;        /* negative values, FAILED, destructive */
+  --color-loss-soft: #ffb48a;
+  --color-info: #6aa7ff;        /* RUNNING, links in code, focus ring */
+  --color-violet: #b794f6;      /* long + short, logical operators */
+
+  --radius-sm: 3px;
+  --radius-md: 4px;
+}
+
+@layer base {
+  html, body, #root { min-height: 100%; }
+  body {
+    margin: 0;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+  input, select, textarea, button { font: inherit; color: inherit; }
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 2px;
+  }
+}
+
+@keyframes line-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes blink {
+  50% { opacity: 0; }
+}
