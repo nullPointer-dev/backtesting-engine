@@ -16,6 +16,8 @@ class BacktestCreate(BaseModel):
     position_sizing_type: PositionSizingType
     quantity: Optional[float] = Field(None, gt=0)
     position_size_percent: Optional[float] = Field(None, gt=0, le=100)
+    commission_pct: float = Field(0.0, ge=0, le=10, description="Commission per side, % of traded value")
+    slippage_pct: float = Field(0.0, ge=0, le=10, description="Price slippage per fill, %")
 
     @field_validator("start_date", "end_date")
     @classmethod
@@ -41,6 +43,22 @@ class BacktestCreate(BaseModel):
         return self
 
 
+class EquityPoint(BaseModel):
+    time: Optional[datetime] = None
+    equity: Optional[float]
+
+
+def normalize_equity_curve(raw) -> list[EquityPoint]:
+    """Accept both the per-bar format and the legacy list of floats."""
+    points = []
+    for item in raw or []:
+        if isinstance(item, dict):
+            points.append(EquityPoint(time=item.get("time"), equity=item.get("equity")))
+        else:
+            points.append(EquityPoint(time=None, equity=item))
+    return points
+
+
 class BacktestSummary(BaseModel):
     """Lightweight view used in lists (no equity curve or traceback)."""
 
@@ -61,6 +79,8 @@ class BacktestSummary(BaseModel):
     position_sizing_type: PositionSizingType
     quantity: Optional[float]
     position_size_percent: Optional[float]
+    commission_pct: float = 0.0
+    slippage_pct: float = 0.0
     final_capital: Optional[float]
     total_return: Optional[float]
     net_profit: Optional[float]
@@ -93,8 +113,16 @@ class BacktestResponse(BacktestSummary):
     max_consecutive_losses: Optional[int]
     avg_trade_duration: Optional[float]
     expectancy: Optional[float]
-    equity_curve: Optional[list[float]]
+    total_commission: Optional[float] = None
+    exposure_pct: Optional[float] = None
+    skipped_trades: Optional[int] = None
+    equity_curve: list[EquityPoint] = []
     error_message: Optional[str]
+
+    @field_validator("equity_curve", mode="before")
+    @classmethod
+    def parse_equity_curve(cls, value):
+        return normalize_equity_curve(value)
 
 
 class BacktestListResponse(BaseModel):
@@ -119,12 +147,17 @@ class BacktestStatusResponse(BaseModel):
 class EquityCurveResponse(BaseModel):
     backtest_id: int
     initial_capital: float
-    equity_curve: list[float]
+    equity_curve: list[EquityPoint]
+
+
+class DrawdownPoint(BaseModel):
+    time: Optional[datetime] = None
+    drawdown: float
 
 
 class DrawdownResponse(BaseModel):
     backtest_id: int
-    drawdown: list[float]
+    drawdown: list[DrawdownPoint]
     max_drawdown: float
 
 

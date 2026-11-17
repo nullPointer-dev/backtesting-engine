@@ -1,5 +1,16 @@
-from app.enums.types import PositionSide
+"""Turns strategy rules into a list of signal-level trades.
 
+Rules are evaluated on each bar's close and orders fill at the next bar's
+open, so a decision never uses information from the bar it trades on.
+Only one position is held at a time. When a position exits, the opposite
+side's entry rule is checked on the same bar, so a strategy can reverse
+from long to short (or back) without waiting a bar.
+
+Prices here are raw market prices; sizing, slippage and commission are
+applied later by the PortfolioEngine.
+"""
+
+from app.enums.types import PositionSide
 from app.strategy_engine.evaluator import Evaluator
 
 
@@ -7,75 +18,83 @@ class BacktestCancelled(Exception):
     """Raised when a running backtest is cancelled by the user."""
 
 
+EXIT_SIGNAL = "SIGNAL"
+EXIT_END_OF_DATA = "END_OF_DATA"
+
+
 class ExecutionEngine:
 
     def __init__(self, symbol: str, dataframe, strategy, indicator_cache):
-        self.dataframe = dataframe
         self.symbol = symbol
+        self.dataframe = dataframe
         self.strategy = strategy
         self.evaluator = Evaluator(dataframe, indicator_cache)
+        self._open_prices = dataframe["open"].to_numpy()
+        self._close_prices = dataframe["close"].to_numpy()
 
-    def run(self, should_stop=None, check_every: int = 250):
+    def run(self, should_stop=None, check_every: int = 250) -> list[dict]:
         trades = []
         position = None
+        bar_count = len(self.dataframe)
 
-        for index in range(len(self.dataframe) - 1):
+        for index in range(bar_count - 1):
             if should_stop is not None and index % check_every == 0 and should_stop():
                 raise BacktestCancelled()
 
-            if position is None:
-                if self.evaluator.evaluate(self.strategy.long_entry, index):
-                    position = {
-                        "symbol": self.symbol,
-                        "side": PositionSide.LONG,
-                        "entry_time": self.dataframe["datetime"].iloc[index + 1],
-                        "entry_price": self.dataframe["open"].iloc[index + 1],
-                        "entry_index": index + 1
-                    }
-                    continue
+            if position is not None:
+                if self._exit_signal(position["side"], index):
+                    trades.append(self._close(position, exit_index=index + 1, reason=EXIT_SIGNAL))
+                    closed_side = position["side"]
+                    position = None
+                    # Allow an immediate reversal into the opposite side.
+                    opposite = PositionSide.SHORT if closed_side == PositionSide.LONG else PositionSide.LONG
+                    if self._entry_signal(opposite, index):
+                        position = self._open_position(opposite, index + 1)
+                continue
 
-                if (self.strategy.short_entry and self.evaluator.evaluate(self.strategy.short_entry, index)):
-                    position = {
-                        "symbol": self.symbol,
-                        "side": PositionSide.SHORT,
-                        "entry_time": self.dataframe["datetime"].iloc[index + 1],
-                        "entry_price": self.dataframe["open"].iloc[index + 1],
-                        "entry_index": index + 1
-                    }
-                    continue
+            for side in (PositionSide.LONG, PositionSide.SHORT):
+                if self._entry_signal(side, index):
+                    position = self._open_position(side, index + 1)
+                    break
 
-            else:
-                if (position["side"]== PositionSide.LONG):
-                    if self.evaluator.evaluate(self.strategy.long_exit, index):
-                        trades.append(self._close_position(position, index))
-                        position = None
-
-                else:
-                    if (self.strategy.short_exit and self.evaluator.evaluate(self.strategy.short_exit, index)):
-                        trades.append(self._close_position(position, index))
-                        position = None
+        if position is not None:
+            trades.append(self._close(position, exit_index=bar_count - 1, reason=EXIT_END_OF_DATA))
 
         return trades
 
-    def _close_position(self, position, index):
-        exit_time = (self.dataframe["datetime"].iloc[index + 1])
-        exit_price = (self.dataframe["open"].iloc[index + 1])
+    def _entry_signal(self, side: PositionSide, index: int) -> bool:
+        rule = self.strategy.long_entry if side == PositionSide.LONG else self.strategy.short_entry
+        return rule is not None and bool(self.evaluator.evaluate(rule, index))
 
-        if (position["side"] == PositionSide.LONG):
-            pnl = (exit_price - position["entry_price"])
+    def _exit_signal(self, side: PositionSide, index: int) -> bool:
+        rule = self.strategy.long_exit if side == PositionSide.LONG else self.strategy.short_exit
+        return rule is not None and bool(self.evaluator.evaluate(rule, index))
 
+    def _open_position(self, side: PositionSide, entry_index: int) -> dict:
+        return {
+            "side": side,
+            "entry_index": entry_index,
+            "entry_price": float(self._open_prices[entry_index]),
+        }
+
+    def _close(self, position: dict, exit_index: int, reason: str) -> dict:
+        if reason == EXIT_END_OF_DATA:
+            # Marked out at the final close; the last bar is fully held.
+            exit_price = float(self._close_prices[exit_index])
+            duration = exit_index - position["entry_index"] + 1
         else:
-            pnl = (position["entry_price"] - exit_price)
-        
-        duration_bars = index + 1 - position["entry_index"]
+            exit_price = float(self._open_prices[exit_index])
+            duration = exit_index - position["entry_index"]
 
         return {
-            "symbol": position["symbol"],
+            "symbol": self.symbol,
             "side": position["side"],
-            "entry_time": position["entry_time"],
+            "entry_index": position["entry_index"],
+            "entry_time": self.dataframe["datetime"].iloc[position["entry_index"]],
             "entry_price": position["entry_price"],
-            "exit_time": exit_time,
+            "exit_index": exit_index,
+            "exit_time": self.dataframe["datetime"].iloc[exit_index],
             "exit_price": exit_price,
-            "pnl": pnl,
-            "duration_bars": duration_bars
+            "exit_reason": reason,
+            "duration_bars": duration,
         }

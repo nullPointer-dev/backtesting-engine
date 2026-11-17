@@ -87,6 +87,10 @@ class Backtest(Base):
 
     position_size_percent: Mapped[float | None] = mapped_column(Double)
 
+    commission_pct: Mapped[float] = mapped_column(Double, nullable=False, default=0.0, server_default="0")
+
+    slippage_pct: Mapped[float] = mapped_column(Double, nullable=False, default=0.0, server_default="0")
+
     final_capital: Mapped[float | None] = mapped_column(Double)
 
     total_return: Mapped[float | None] = mapped_column(Double)
@@ -125,7 +129,15 @@ class Backtest(Base):
 
     expectancy: Mapped[float | None] = mapped_column(Double)
 
-    equity_curve: Mapped[list[float] | None] = mapped_column(JSONB)
+    total_commission: Mapped[float | None] = mapped_column(Double)
+
+    exposure_pct: Mapped[float | None] = mapped_column(Double)
+
+    skipped_trades: Mapped[int | None] = mapped_column(Integer)
+
+    # List of {"time": ISO-8601, "equity": float}, one per bar. Backtests run
+    # before per-bar equity was introduced hold a plain list of floats.
+    equity_curve: Mapped[list | None] = mapped_column(JSONB)
 
     error_message: Mapped[str | None] = mapped_column(Text)
 

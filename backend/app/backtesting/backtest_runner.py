@@ -90,26 +90,27 @@ class BacktestRunner:
                 "Backtest %s: %d bars, %d trades", self.backtest_id, len(dataframe), len(raw_trades)
             )
 
-            portfolio_result = PortfolioEngine(
+            portfolio = PortfolioEngine(
                 initial_capital=backtest.initial_capital,
                 position_sizing_type=backtest.position_sizing_type,
                 quantity=backtest.quantity,
                 position_size_percent=backtest.position_size_percent,
-            ).process_trades(raw_trades)
+                commission_pct=backtest.commission_pct,
+                slippage_pct=backtest.slippage_pct,
+            ).run(dataframe, raw_trades)
 
             metrics = PerformanceMetrics(
-                trades=portfolio_result["trades"],
-                equity_curve=portfolio_result["equity_curve"],
+                trades=portfolio["trades"],
+                equity=portfolio["equity"],
+                timestamps=dataframe["datetime"],
                 initial_capital=backtest.initial_capital,
-                final_capital=portfolio_result["final_capital"],
-                start_date=backtest.start_date,
-                end_date=backtest.end_date,
+                timeframe=backtest.timeframe,
             ).calculate()
 
             if self._is_cancelled():
                 raise BacktestCancelled()
 
-            for trade in portfolio_result["trades"]:
+            for trade in portfolio["trades"]:
                 session.add(
                     Trade(
                         backtest_id=backtest.backtest_id,
@@ -119,16 +120,24 @@ class BacktestRunner:
                         entry_price=float(trade["entry_price"]),
                         exit_time=_to_datetime(trade["exit_time"]),
                         exit_price=float(trade["exit_price"]),
+                        exit_reason=trade["exit_reason"],
                         quantity=float(trade["quantity"]),
                         duration_bars=int(trade["duration_bars"]),
                         pnl=float(trade["pnl"]),
+                        commission=float(trade["commission"]),
+                        return_pct=float(trade["return_pct"]),
+                        mae_pct=float(trade["mae_pct"]),
+                        mfe_pct=float(trade["mfe_pct"]),
                     )
                 )
 
             for key, value in metrics.items():
                 setattr(backtest, key, value)
 
-            backtest.equity_curve = portfolio_result["equity_curve"]
+            backtest.equity_curve = portfolio["equity_curve"]
+            backtest.total_commission = portfolio["total_commission"]
+            backtest.exposure_pct = portfolio["exposure_pct"]
+            backtest.skipped_trades = portfolio["skipped_trades"]
             backtest.status = BacktestStatus.COMPLETED
             backtest.completed_at = datetime.now(timezone.utc)
             session.commit()

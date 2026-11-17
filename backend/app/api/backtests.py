@@ -29,8 +29,10 @@ from app.schemas.backtest import (
     CompareRequest,
     CompareResponse,
     DashboardSummary,
+    DrawdownPoint,
     DrawdownResponse,
     EquityCurveResponse,
+    normalize_equity_curve,
     HistogramBucket,
     PeriodReturn,
     ReturnsBreakdownResponse,
@@ -70,6 +72,31 @@ def _histogram(values: list[float], bins: int, integer: bool = False) -> list[Hi
         HistogramBucket(range=f"{fmt(edges[i])} to {fmt(edges[i + 1])}", count=int(counts[i]))
         for i in range(len(counts))
     ]
+
+
+def _period_returns_from_equity(points, initial_capital: float, fmt: str) -> list[PeriodReturn]:
+    """Return per calendar period, measured from the equity at the previous period's end."""
+    period_end: dict[str, float] = {}
+    for point in points:
+        period_end[point.time.strftime(fmt)] = point.equity
+
+    periods = []
+    previous = initial_capital
+    for period, equity in period_end.items():
+        pnl = equity - previous
+        return_pct = (pnl / previous) * 100 if previous > 0 else 0.0
+        periods.append(PeriodReturn(period=period, pnl=pnl, return_pct=return_pct))
+        previous = equity
+    return periods
+
+
+def _average_excursions(trades: list[Trade]) -> dict[str, float]:
+    mae = [t.mae_pct for t in trades if t.mae_pct is not None]
+    mfe = [t.mfe_pct for t in trades if t.mfe_pct is not None]
+    return {
+        "avg_mae": float(np.mean(mae)) if mae else 0.0,
+        "avg_mfe": float(np.mean(mfe)) if mfe else 0.0,
+    }
 
 
 def run_backtest_job(backtest_id: int):
@@ -309,7 +336,7 @@ def get_equity_curve(
     return EquityCurveResponse(
         backtest_id=backtest_id,
         initial_capital=backtest.initial_capital,
-        equity_curve=backtest.equity_curve or [],
+        equity_curve=normalize_equity_curve(backtest.equity_curve),
     )
 
 
@@ -320,15 +347,16 @@ def get_drawdown(
     db: Session = Depends(get_db),
 ):
     backtest = _get_owned_backtest(db, current_user, backtest_id)
-    equity = np.asarray(backtest.equity_curve or [], dtype=float)
-    if equity.size == 0:
+    points = [p for p in normalize_equity_curve(backtest.equity_curve) if p.equity is not None]
+    if not points:
         return DrawdownResponse(backtest_id=backtest_id, drawdown=[], max_drawdown=0.0)
 
-    running_max = np.maximum.accumulate(equity)
+    equity = np.asarray([p.equity for p in points], dtype=float)
+    running_max = np.maximum.accumulate(np.maximum(equity, backtest.initial_capital))
     drawdowns = np.where(running_max > 0, (equity - running_max) / running_max * 100, 0.0)
     return DrawdownResponse(
         backtest_id=backtest_id,
-        drawdown=drawdowns.tolist(),
+        drawdown=[DrawdownPoint(time=p.time, drawdown=float(d)) for p, d in zip(points, drawdowns)],
         max_drawdown=float(drawdowns.min()),
     )
 
@@ -340,6 +368,18 @@ def get_returns_breakdown(
     db: Session = Depends(get_db),
 ):
     backtest = _get_owned_backtest(db, current_user, backtest_id)
+    points = [
+        p for p in normalize_equity_curve(backtest.equity_curve)
+        if p.time is not None and p.equity is not None
+    ]
+    if points:
+        return ReturnsBreakdownResponse(
+            backtest_id=backtest_id,
+            monthly_returns=_period_returns_from_equity(points, backtest.initial_capital, "%Y-%m"),
+            yearly_returns=_period_returns_from_equity(points, backtest.initial_capital, "%Y"),
+        )
+
+    # Legacy backtests without timestamped equity: approximate from closed trades.
     trades = _closed_trades(db, backtest_id)
 
     monthly = defaultdict(float)
@@ -405,7 +445,7 @@ def get_trade_analysis(
         duration_distribution=_histogram(
             [trade.duration_bars for trade in trades], bins=min(20, max(1, len(trades))), integer=True
         ),
-        mae_mfe={"avg_mae": 0.0, "avg_mfe": 0.0},
+        mae_mfe=_average_excursions(trades),
         consecutive={"max_wins": max_wins, "max_losses": max_losses},
     )
 
@@ -427,7 +467,8 @@ def export_backtest(
 
     trade_columns = [
         "trade_id", "symbol", "side", "entry_time", "entry_price",
-        "exit_time", "exit_price", "quantity", "duration_bars", "pnl",
+        "exit_time", "exit_price", "exit_reason", "quantity", "duration_bars",
+        "pnl", "commission", "return_pct", "mae_pct", "mfe_pct",
     ]
 
     def trade_row(trade: Trade) -> dict:
@@ -439,9 +480,14 @@ def export_backtest(
             "entry_price": trade.entry_price,
             "exit_time": trade.exit_time.isoformat() if trade.exit_time else None,
             "exit_price": trade.exit_price,
+            "exit_reason": trade.exit_reason,
             "quantity": trade.quantity,
             "duration_bars": trade.duration_bars,
             "pnl": trade.pnl,
+            "commission": trade.commission,
+            "return_pct": trade.return_pct,
+            "mae_pct": trade.mae_pct,
+            "mfe_pct": trade.mfe_pct,
         }
 
     if format == "json":
