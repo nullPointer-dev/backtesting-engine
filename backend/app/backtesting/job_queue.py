@@ -26,7 +26,12 @@ def run_backtest_job(backtest_id: int) -> None:
     # Imported here so worker processes only load the engine when they need it.
     from app.backtesting.backtest_runner import BacktestRunner
 
-    BacktestRunner(backtest_id=backtest_id).run()
+    try:
+        BacktestRunner(backtest_id=backtest_id).run()
+    except Exception:
+        # The runner has already marked the backtest FAILED and stored the
+        # traceback; log it here rather than crash the worker or request.
+        logger.exception("Backtest %s failed", backtest_id)
 
 
 def _get_executor() -> ProcessPoolExecutor:
@@ -44,8 +49,8 @@ def _get_executor() -> ProcessPoolExecutor:
 def _log_failure(backtest_id: int, future: Future) -> None:
     error = future.exception()
     if error is not None:
-        # The runner has already stored the traceback on the backtest row.
-        logger.warning("Backtest %s failed: %s", backtest_id, error)
+        # Only reached if the worker process itself broke (e.g. it was killed).
+        logger.error("Backtest %s worker error: %r", backtest_id, error)
 
 
 def submit_backtest(backtest_id: int, background_tasks: BackgroundTasks) -> None:
