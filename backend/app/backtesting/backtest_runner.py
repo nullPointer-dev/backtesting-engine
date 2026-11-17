@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import traceback
 
 from sqlalchemy import select
 
@@ -99,6 +100,7 @@ class BacktestRunner:
             for key, value in (metrics.items()):
                 setattr(backtest, key, value)
 
+            backtest.equity_curve = portfolio_result["equity_curve"]
             backtest.status = (BacktestStatus.COMPLETED)
             backtest.completed_at = (datetime.now(timezone.utc))
             session.commit()
@@ -108,13 +110,14 @@ class BacktestRunner:
                 "metrics": metrics
             }
 
-        except Exception:
+        except Exception as e:
 
             session.rollback()
             backtest = (session.get(Backtest, self.backtest_id))
 
             if backtest:
                 backtest.status = (BacktestStatus.FAILED)
+                backtest.error_message = traceback.format_exc()
                 session.commit()
 
             raise

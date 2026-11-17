@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime
 from sqlalchemy import Double
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
+from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import ENUM
+from sqlalchemy.dialects.postgresql import JSONB
 
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
@@ -16,6 +19,10 @@ from sqlalchemy.orm import relationship
 from app.enums.types import BacktestStatus
 from app.enums.types import PositionSizingType, TimeFrame
 from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.strategy import Strategy
+    from app.models.trade import Trade
 
 
 class Backtest(Base):
@@ -117,6 +124,10 @@ class Backtest(Base):
     total_trades: Mapped[int | None] = mapped_column(Integer)
 
     expectancy: Mapped[float | None] = mapped_column(Double)
+
+    equity_curve: Mapped[list[float] | None] = mapped_column(JSONB)
+
+    error_message: Mapped[str | None] = mapped_column(Text)
 
     strategy: Mapped[Strategy] = relationship(
         back_populates="backtests",

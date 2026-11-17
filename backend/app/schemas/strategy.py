@@ -28,3 +28,13 @@ class StrategyResponse(BaseModel):
 class StrategyListResponse(BaseModel):
     strategies: list[StrategyResponse]
     total: int
+
+
+class StrategyValidateRequest(BaseModel):
+    strategy_json: dict
+
+
+class StrategyValidateResponse(BaseModel):
+    valid: bool
+    errors: list[str] = []
+    warnings: list[str] = []

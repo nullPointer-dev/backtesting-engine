@@ -55,6 +55,8 @@ class BacktestResponse(BaseModel):
     profit_factor: Optional[float]
     total_trades: Optional[int]
     expectancy: Optional[float]
+    equity_curve: Optional[list[float]]
+    error_message: Optional[str]
 
     class Config:
         from_attributes = True

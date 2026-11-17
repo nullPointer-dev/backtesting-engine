@@ -7,11 +7,14 @@ from app.core.database import SessionLocal
 from app.api.auth import get_current_user
 from app.models.user import User
 from app.models.strategy import Strategy
+from app.strategy_engine.schemas.strategy_definition import StrategyDefinition
 from app.schemas.strategy import (
     StrategyCreate,
     StrategyUpdate,
     StrategyResponse,
     StrategyListResponse,
+    StrategyValidateRequest,
+    StrategyValidateResponse,
 )
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
@@ -119,3 +122,36 @@ def delete_strategy(
     db.delete(strategy)
     db.commit()
     return None
+
+
+@router.post("/validate", response_model=StrategyValidateResponse)
+def validate_strategy(
+    strategy_in: StrategyValidateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    errors = []
+    warnings = []
+    
+    try:
+        StrategyDefinition.model_validate(strategy_in.strategy_json)
+    except Exception as e:
+        errors.append(str(e))
+    
+    if not errors:
+        strategy_json = strategy_in.strategy_json
+        required_keys = ["long_entry", "long_exit"]
+        for key in required_keys:
+            if key not in strategy_json:
+                errors.append(f"Missing required key: {key}")
+        
+        for key in ["short_entry", "short_exit"]:
+            if key in strategy_json and strategy_json[key] is not None:
+                pass
+            elif key in strategy_json and strategy_json[key] is None:
+                warnings.append(f"Optional key {key} is null")
+    
+    return StrategyValidateResponse(
+        valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+    )

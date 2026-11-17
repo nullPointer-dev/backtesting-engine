@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.database import engine
 from app.models import Base
-from app.api import auth, strategies, backtests
+from app.api import auth, strategies, backtests, market_data
 
 
 @asynccontextmanager
@@ -30,6 +30,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(strategies.router)
 app.include_router(backtests.router)
+app.include_router(market_data.router)
 
 
 @app.get("/health")
