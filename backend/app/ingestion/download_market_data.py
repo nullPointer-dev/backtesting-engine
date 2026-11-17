@@ -27,6 +27,9 @@ from app.enums.types import (
 )
 
 
+SLIDING_WINDOW_TIMEFRAMES = {"1m", "5m", "15m", "30m", "60m"}
+
+
 def download_and_store(
     symbol: str,
     timeframe: str,
@@ -83,14 +86,20 @@ def latest_datetime(
         session.close()
 
 
-def full_load():
+def full_load(
+    symbols: list[str] | None = None,
+    timeframes: list[str] | None = None
+):
+
+    symbols = symbols or sorted(SUPPORTED_SYMBOLS)
+    timeframes = timeframes or SUPPORTED_TIMEFRAMES
 
     total = len(
-        SUPPORTED_SYMBOLS
+        symbols
     )
 
     for index, symbol in enumerate(
-        SUPPORTED_SYMBOLS,
+        symbols,
         start=1
     ):
 
@@ -99,7 +108,7 @@ def full_load():
         )
 
         for timeframe in (
-            SUPPORTED_TIMEFRAMES
+            timeframes
         ):
 
             try:
@@ -122,10 +131,16 @@ def full_load():
                 )
 
 
-def incremental_update():
+def incremental_update(
+    symbols: list[str] | None = None,
+    timeframes: list[str] | None = None
+):
+
+    symbols = symbols or sorted(SUPPORTED_SYMBOLS)
+    timeframes = timeframes or SUPPORTED_TIMEFRAMES
 
     for symbol in (
-        SUPPORTED_SYMBOLS
+        symbols
     ):
 
         print(
@@ -133,7 +148,7 @@ def incremental_update():
         )
 
         for timeframe in (
-            SUPPORTED_TIMEFRAMES
+            timeframes
         ):
 
             try:
@@ -162,9 +177,14 @@ def incremental_update():
                         start=start
                     )
 
-                if inserted > 0:
+                if inserted > 0 and timeframe in SLIDING_WINDOW_TIMEFRAMES:
+                    # Intraday data is kept as a fixed-size window: Yahoo only
+                    # serves recent intraday bars, so the table would otherwise
+                    # grow without bound. Daily/weekly history is never deleted.
                     delete_oldest_rows(symbol, timeframe, inserted)
                     print(f"    Inserted {inserted} new rows, deleted {inserted} oldest rows")
+                elif inserted > 0:
+                    print(f"    Inserted {inserted} new rows")
 
                 print(
                     f"[OK] {timeframe}"

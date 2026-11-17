@@ -1,16 +1,24 @@
+import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.database import engine
-from app.models import Base
-from app.api import auth, strategies, backtests
+from app.core.config import CORS_ORIGINS
+from app.api import auth, strategies, backtests, market_data, indicators
+from app.backtesting import job_queue
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    interrupted = job_queue.fail_interrupted_backtests()
+    if interrupted:
+        logger.warning("Marked %d interrupted backtest(s) as failed", interrupted)
     yield
+    job_queue.shutdown()
 
 
 app = FastAPI(
@@ -21,7 +29,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,6 +38,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(strategies.router)
 app.include_router(backtests.router)
+app.include_router(market_data.router)
+app.include_router(indicators.router)
 
 
 @app.get("/health")

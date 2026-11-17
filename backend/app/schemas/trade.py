@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import Optional
 
@@ -14,12 +14,16 @@ class TradeResponse(BaseModel):
     entry_price: float
     exit_time: datetime
     exit_price: float
+    exit_reason: Optional[str] = None
     quantity: float
     duration_bars: int
     pnl: float
+    commission: Optional[float] = None
+    return_pct: Optional[float] = None
+    mae_pct: Optional[float] = None
+    mfe_pct: Optional[float] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TradeListResponse(BaseModel):

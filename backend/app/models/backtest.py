@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime
 from sqlalchemy import Double
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
+from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import ENUM
+from sqlalchemy.dialects.postgresql import JSONB
 
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
@@ -16,6 +19,10 @@ from sqlalchemy.orm import relationship
 from app.enums.types import BacktestStatus
 from app.enums.types import PositionSizingType, TimeFrame
 from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.strategy import Strategy
+    from app.models.trade import Trade
 
 
 class Backtest(Base):
@@ -80,6 +87,10 @@ class Backtest(Base):
 
     position_size_percent: Mapped[float | None] = mapped_column(Double)
 
+    commission_pct: Mapped[float] = mapped_column(Double, nullable=False, default=0.0, server_default="0")
+
+    slippage_pct: Mapped[float] = mapped_column(Double, nullable=False, default=0.0, server_default="0")
+
     final_capital: Mapped[float | None] = mapped_column(Double)
 
     total_return: Mapped[float | None] = mapped_column(Double)
@@ -117,6 +128,25 @@ class Backtest(Base):
     total_trades: Mapped[int | None] = mapped_column(Integer)
 
     expectancy: Mapped[float | None] = mapped_column(Double)
+
+    total_commission: Mapped[float | None] = mapped_column(Double)
+
+    exposure_pct: Mapped[float | None] = mapped_column(Double)
+
+    skipped_trades: Mapped[int | None] = mapped_column(Integer)
+
+    # List of {"time": ISO-8601, "equity": float}, one per bar. Backtests run
+    # before per-bar equity was introduced hold a plain list of floats.
+    equity_curve: Mapped[list | None] = mapped_column(JSONB)
+
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    # Live progress while RUNNING: 0-100, a short stage key and a log line.
+    progress_pct: Mapped[float | None] = mapped_column(Double)
+
+    progress_stage: Mapped[str | None] = mapped_column(String(32))
+
+    progress_message: Mapped[str | None] = mapped_column(Text)
 
     strategy: Mapped[Strategy] = relationship(
         back_populates="backtests",

@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -9,7 +10,8 @@ from app.core.config import JWT_SECRET_KEY
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
-BCRYPT_ROUNDS = 12
+# Cost factor for password hashing. Tests lower it (BCRYPT_ROUNDS=4) to run fast.
+BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

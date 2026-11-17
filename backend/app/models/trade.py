@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime
 from sqlalchemy import Double
@@ -14,6 +15,9 @@ from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
 
 from app.enums.types import PositionSide
+
+if TYPE_CHECKING:
+    from app.models.backtest import Backtest
 from app.models.base import Base
 
 
@@ -77,6 +81,16 @@ class Trade(Base):
     pnl: Mapped[float | None] = mapped_column(
         Double
     )
+
+    commission: Mapped[float | None] = mapped_column(Double)
+
+    return_pct: Mapped[float | None] = mapped_column(Double)
+
+    mae_pct: Mapped[float | None] = mapped_column(Double)
+
+    mfe_pct: Mapped[float | None] = mapped_column(Double)
+
+    exit_reason: Mapped[str | None] = mapped_column(String(20))
 
     backtest: Mapped[Backtest] = relationship(
         back_populates="trades",

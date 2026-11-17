@@ -1,3 +1,3 @@
-from app.api import auth, strategies, backtests
+from app.api import auth, strategies, backtests, market_data, indicators
 
-__all__ = ["auth", "strategies", "backtests"]
+__all__ = ["auth", "strategies", "backtests", "market_data", "indicators"]

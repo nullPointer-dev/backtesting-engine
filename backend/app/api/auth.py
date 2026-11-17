@@ -1,34 +1,29 @@
 from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.core.database import SessionLocal
+from app.core.database import get_db
 from app.core.security import (
-    verify_password,
-    get_password_hash,
     create_access_token,
     decode_access_token,
+    get_password_hash,
+    verify_password,
 )
 from app.models.user import User
-from app.schemas.auth import (
-    UserRegister,
-    UserLogin,
-    Token,
-    UserResponse,
-)
+from app.schemas.auth import Token, UserLogin, UserRegister, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+# /auth/token takes form data, which is what the "Authorize" button in /docs sends.
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+_CREDENTIALS_ERROR = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Could not validate credentials",
+    headers={"WWW-Authenticate": "Bearer"},
+)
 
 
 def get_current_user(
@@ -36,46 +31,26 @@ def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     payload = decode_access_token(token)
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    username: str = payload.get("sub")
-    if username is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    user = db.query(User).filter(User.username == username).first()
+    if payload is None or payload.get("sub") is None:
+        raise _CREDENTIALS_ERROR
+    user = db.query(User).filter(User.username == payload["sub"]).first()
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise _CREDENTIALS_ERROR
     return user
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register(user_in: UserRegister, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.username == user_in.username).first()
-    if existing:
+def _authenticate(db: Session, username: str, password: str) -> Token:
+    user = db.query(User).filter(User.username == username).first()
+    if not user or not verify_password(password, user.password_hash):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already registered",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    hashed_password = get_password_hash(user_in.password)
-    user = User(
-        username=user_in.username,
-        password_hash=hashed_password,
-        created_at=datetime.now(timezone.utc),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    return Token(access_token=create_access_token(data={"sub": user.username}))
+
+
+def _user_response(user: User) -> UserResponse:
     return UserResponse(
         user_id=user.user_id,
         username=user.username,
@@ -83,23 +58,33 @@ def register(user_in: UserRegister, db: Session = Depends(get_db)):
     )
 
 
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def register(user_in: UserRegister, db: Session = Depends(get_db)):
+    if db.query(User).filter(User.username == user_in.username).first():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already registered")
+    user = User(
+        username=user_in.username,
+        password_hash=get_password_hash(user_in.password),
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return _user_response(user)
+
+
 @router.post("/login", response_model=Token)
 def login(user_in: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == user_in.username).first()
-    if not user or not verify_password(user_in.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    access_token = create_access_token(data={"sub": user.username})
-    return Token(access_token=access_token)
+    """Log in with a JSON body (used by the frontend)."""
+    return _authenticate(db, user_in.username, user_in.password)
+
+
+@router.post("/token", response_model=Token, include_in_schema=False)
+def login_form(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """Log in with form data (used by the Swagger UI "Authorize" button)."""
+    return _authenticate(db, form.username, form.password)
 
 
 @router.get("/me", response_model=UserResponse)
 def read_current_user(current_user: User = Depends(get_current_user)):
-    return UserResponse(
-        user_id=current_user.user_id,
-        username=current_user.username,
-        created_at=current_user.created_at.isoformat(),
-    )
+    return _user_response(current_user)

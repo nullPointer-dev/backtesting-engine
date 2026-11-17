@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 from datetime import datetime
 
@@ -21,10 +21,19 @@ class StrategyResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class StrategyListResponse(BaseModel):
     strategies: list[StrategyResponse]
     total: int
+
+
+class StrategyValidateRequest(BaseModel):
+    strategy_json: dict
+
+
+class StrategyValidateResponse(BaseModel):
+    valid: bool
+    errors: list[str] = []
+    warnings: list[str] = []
