@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import type { ComponentType } from 'react'
+import { Suspense, type ComponentType } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { API_URL } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
 import { BacktestsIcon, MarketDataIcon, OverviewIcon, SignOutIcon, StrategiesIcon } from './icons'
 import { Logo } from './Logo'
+import { Loading } from './ui'
 
 const NAV: { to: string; label: string; icon: ComponentType }[] = [
   { to: '/overview', label: 'Overview', icon: OverviewIcon },
@@ -84,7 +85,9 @@ export function AppShell() {
         </div>
       </aside>
       <main className="flex min-w-0 flex-[999_1_560px] flex-col gap-8 px-12 py-10 max-md:px-4 max-md:py-6">
-        <Outlet />
+        <Suspense fallback={<Loading />}>
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   )
