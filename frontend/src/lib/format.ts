@@ -1,4 +1,5 @@
 // Number, money and date formatting used across screens (Indian grouping, ₹).
+// Dates are shown in IST: NSE bars are stamped at midnight India time.
 
 const MINUS = '−'
 
@@ -34,9 +35,9 @@ export function toneClass(value: number | null | undefined) {
   return value > 0 ? 'text-gain' : 'text-loss'
 }
 
-const monthYear = new Intl.DateTimeFormat('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' })
-const dayMonthYear = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
-const dateTime = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+const monthYear = new Intl.DateTimeFormat('en-GB', { month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })
+const dayMonthYear = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })
+const dateTime = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })
 
 export function monthRange(start: string, end: string) {
   const a = monthYear.format(new Date(start))

@@ -107,3 +107,19 @@ export async function unwrap<T>(
   if (!response.ok || error !== undefined) throw new ApiError(response.status, error)
   return data as T
 }
+
+/** Download an authenticated file (exports) by fetching it with the bearer token. */
+export async function downloadFile(path: string, fallbackName: string) {
+  const response = await fetch(`${API_URL}${path}`, {
+    headers: memoryToken ? { Authorization: `Bearer ${memoryToken}` } : {},
+  })
+  if (!response.ok) throw new ApiError(response.status, await response.json().catch(() => undefined))
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const name = /filename=([^;]+)/.exec(disposition)?.[1]?.trim() ?? fallbackName
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}

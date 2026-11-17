@@ -79,3 +79,117 @@ export function useDeleteStrategy() {
     },
   })
 }
+
+// ---------------------------------------------------------------- backtests and market data
+
+export type Trade = Schemas['TradeResponse']
+export type SymbolInfo = Schemas['SymbolInfo']
+export type BacktestCreate = Schemas['BacktestCreate']
+export type StatusResponse = Schemas['BacktestStatusResponse']
+
+const ACTIVE: BacktestStatus[] = ['PENDING', 'RUNNING']
+
+export function useSymbols() {
+  return useQuery({
+    queryKey: ['symbols'],
+    queryFn: () => unwrap(api.GET('/market-data/symbols')),
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useBacktest(id: number) {
+  return useQuery({
+    queryKey: keys.backtest(id),
+    queryFn: () => unwrap(api.GET('/backtests/{backtest_id}', { params: { path: { backtest_id: id } } })),
+  })
+}
+
+/** Polls twice a second while the backtest is queued or running. */
+export function useBacktestStatus(id: number) {
+  return useQuery({
+    queryKey: ['backtest-status', id],
+    queryFn: () => unwrap(api.GET('/backtests/{backtest_id}/status', { params: { path: { backtest_id: id } } })),
+    refetchInterval: (query) => (query.state.data && !ACTIVE.includes(query.state.data.status) ? false : 500),
+    staleTime: 0,
+  })
+}
+
+export function useTrades(id: number, enabled = true) {
+  return useQuery({
+    queryKey: ['trades', id],
+    queryFn: () =>
+      unwrap(api.GET('/backtests/{backtest_id}/trades', { params: { path: { backtest_id: id }, query: { limit: 5000 } } })),
+    enabled,
+  })
+}
+
+export function useHistory(symbol: string | undefined, timeframe: string | undefined, start?: string, end?: string) {
+  return useQuery({
+    queryKey: ['history', symbol, timeframe, start, end],
+    queryFn: () =>
+      unwrap(
+        api.GET('/market-data/{symbol}/history', {
+          params: {
+            path: { symbol: symbol! },
+            query: { timeframe: timeframe as Schemas['TimeFrame'], start_date: start, end_date: end, limit: 10000 },
+          },
+        }),
+      ),
+    enabled: !!symbol && !!timeframe,
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useReturnsBreakdown(id: number, enabled = true) {
+  return useQuery({
+    queryKey: ['returns', id],
+    queryFn: () => unwrap(api.GET('/backtests/{backtest_id}/returns-breakdown', { params: { path: { backtest_id: id } } })),
+    enabled,
+  })
+}
+
+function useInvalidateBacktests() {
+  const queryClient = useQueryClient()
+  return (id?: number) => {
+    queryClient.invalidateQueries({ queryKey: ['backtests'] })
+    queryClient.invalidateQueries({ queryKey: keys.dashboard })
+    if (id != null) {
+      queryClient.invalidateQueries({ queryKey: keys.backtest(id) })
+      queryClient.invalidateQueries({ queryKey: ['backtest-status', id] })
+      queryClient.invalidateQueries({ queryKey: ['trades', id] })
+      queryClient.invalidateQueries({ queryKey: ['returns', id] })
+    }
+  }
+}
+
+export function useCreateBacktest() {
+  const invalidate = useInvalidateBacktests()
+  return useMutation({
+    mutationFn: (body: BacktestCreate) => unwrap(api.POST('/backtests', { body })),
+    onSuccess: () => invalidate(),
+  })
+}
+
+export function useRunBacktest() {
+  const invalidate = useInvalidateBacktests()
+  return useMutation({
+    mutationFn: (id: number) => unwrap(api.POST('/backtests/{backtest_id}/run', { params: { path: { backtest_id: id } } })),
+    onSuccess: (_, id) => invalidate(id),
+  })
+}
+
+export function useCancelBacktest() {
+  const invalidate = useInvalidateBacktests()
+  return useMutation({
+    mutationFn: (id: number) => unwrap(api.POST('/backtests/{backtest_id}/cancel', { params: { path: { backtest_id: id } } })),
+    onSuccess: (_, id) => invalidate(id),
+  })
+}
+
+export function useDeleteBacktest() {
+  const invalidate = useInvalidateBacktests()
+  return useMutation({
+    mutationFn: (id: number) => unwrap(api.DELETE('/backtests/{backtest_id}', { params: { path: { backtest_id: id } } })),
+    onSuccess: () => invalidate(),
+  })
+}

@@ -4,7 +4,10 @@ import { AppShell } from './components/AppShell'
 import { Builder } from './pages/Builder'
 import { Login } from './pages/Login'
 import { Overview } from './pages/Overview'
+import { Results } from './pages/Results'
+import { Run } from './pages/Run'
 import { Strategies } from './pages/Strategies'
+import { NewBacktest } from './pages/NewBacktest'
 import { NotFound } from './pages/NotFound'
 import { Placeholder } from './pages/Placeholder'
 
@@ -23,9 +26,9 @@ export default function App() {
           <Route path="/strategies/new" element={<Builder />} />
           <Route path="/strategies/:strategyId" element={<Builder key="edit" />} />
           <Route path="/backtests" element={<Placeholder title="Backtests" />} />
-          <Route path="/backtests/new" element={<Placeholder title="New backtest" />} />
-          <Route path="/backtests/:backtestId" element={<Placeholder title="Backtest results" />} />
-          <Route path="/backtests/:backtestId/run" element={<Placeholder title="Run" />} />
+          <Route path="/backtests/new" element={<NewBacktest />} />
+          <Route path="/backtests/:backtestId" element={<Results />} />
+          <Route path="/backtests/:backtestId/run" element={<Run />} />
           <Route path="/compare" element={<Placeholder title="Compare backtests" />} />
           <Route path="/market-data" element={<Placeholder title="Market data" />} />
           <Route path="/dashboard" element={<Navigate to="/overview" replace />} />
