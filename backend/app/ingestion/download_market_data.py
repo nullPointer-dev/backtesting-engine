@@ -86,14 +86,20 @@ def latest_datetime(
         session.close()
 
 
-def full_load():
+def full_load(
+    symbols: list[str] | None = None,
+    timeframes: list[str] | None = None
+):
+
+    symbols = symbols or sorted(SUPPORTED_SYMBOLS)
+    timeframes = timeframes or SUPPORTED_TIMEFRAMES
 
     total = len(
-        SUPPORTED_SYMBOLS
+        symbols
     )
 
     for index, symbol in enumerate(
-        SUPPORTED_SYMBOLS,
+        symbols,
         start=1
     ):
 
@@ -102,7 +108,7 @@ def full_load():
         )
 
         for timeframe in (
-            SUPPORTED_TIMEFRAMES
+            timeframes
         ):
 
             try:
@@ -125,10 +131,16 @@ def full_load():
                 )
 
 
-def incremental_update():
+def incremental_update(
+    symbols: list[str] | None = None,
+    timeframes: list[str] | None = None
+):
+
+    symbols = symbols or sorted(SUPPORTED_SYMBOLS)
+    timeframes = timeframes or SUPPORTED_TIMEFRAMES
 
     for symbol in (
-        SUPPORTED_SYMBOLS
+        symbols
     ):
 
         print(
@@ -136,7 +148,7 @@ def incremental_update():
         )
 
         for timeframe in (
-            SUPPORTED_TIMEFRAMES
+            timeframes
         ):
 
             try:
