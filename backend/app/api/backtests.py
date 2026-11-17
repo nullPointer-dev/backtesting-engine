@@ -154,11 +154,19 @@ def list_backtests(
     query = _user_backtests(db, current_user)
     if strategy_id is not None:
         query = query.filter(Backtest.strategy_id == strategy_id)
+    status_counts = {
+        status.value: count
+        for status, count in query.with_entities(Backtest.status, func.count()).group_by(Backtest.status)
+    }
     if status_filter is not None:
         query = query.filter(Backtest.status == status_filter)
     total = query.count()
     backtests = query.order_by(Backtest.created_at.desc()).offset(skip).limit(limit).all()
-    return BacktestListResponse(backtests=backtests, total=total)
+    return BacktestListResponse(
+        backtests=backtests,
+        total=total,
+        status_counts={status.value: status_counts.get(status.value, 0) for status in BacktestStatus},
+    )
 
 
 @router.get("/dashboard/summary", response_model=DashboardSummary)
@@ -190,6 +198,8 @@ def get_dashboard_summary(
         completed_backtests=counts.get(BacktestStatus.COMPLETED, 0),
         running_backtests=counts.get(BacktestStatus.RUNNING, 0),
         failed_backtests=counts.get(BacktestStatus.FAILED, 0),
+        pending_backtests=counts.get(BacktestStatus.PENDING, 0),
+        cancelled_backtests=counts.get(BacktestStatus.CANCELLED, 0),
         total_strategies=total_strategies,
         best_return=float(best) if best is not None else None,
         worst_return=float(worst) if worst is not None else None,
@@ -268,6 +278,9 @@ def run_backtest(
     backtest.started_at = datetime.now(timezone.utc)
     backtest.completed_at = None
     backtest.error_message = None
+    backtest.progress_pct = 0.0
+    backtest.progress_stage = "queued"
+    backtest.progress_message = "queued for a worker"
     db.commit()
 
     submit_backtest(backtest_id, background_tasks)
@@ -293,6 +306,8 @@ def cancel_backtest(
         )
     backtest.status = BacktestStatus.CANCELLED
     backtest.error_message = "Cancelled by user"
+    backtest.progress_stage = "cancelled"
+    backtest.progress_message = "cancelled by user; nothing was saved"
     backtest.completed_at = datetime.now(timezone.utc)
     db.commit()
     return backtest

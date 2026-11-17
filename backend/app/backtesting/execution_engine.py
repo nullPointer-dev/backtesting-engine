@@ -32,13 +32,18 @@ class ExecutionEngine:
         self._open_prices = dataframe["open"].to_numpy()
         self._close_prices = dataframe["close"].to_numpy()
 
-    def run(self, should_stop=None, check_every: int = 250) -> list[dict]:
+    def run(self, checkpoint=None, check_every: int = 250) -> list[dict]:
+        """Evaluate the rules bar by bar.
+
+        ``checkpoint(index, bar_count)`` is called every ``check_every`` bars to
+        report progress; returning True cancels the run.
+        """
         trades = []
         position = None
         bar_count = len(self.dataframe)
 
         for index in range(bar_count - 1):
-            if should_stop is not None and index % check_every == 0 and should_stop():
+            if checkpoint is not None and index % check_every == 0 and checkpoint(index, bar_count):
                 raise BacktestCancelled()
 
             if position is not None:

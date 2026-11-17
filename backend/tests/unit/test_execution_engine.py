@@ -73,9 +73,10 @@ def test_no_signals_no_trades():
 def test_cancellation_is_checked_during_the_loop():
     calls = []
 
-    def should_stop():
-        calls.append(1)
+    def checkpoint(index, total):
+        calls.append((index, total))
         return len(calls) > 1
 
     with pytest.raises(BacktestCancelled):
-        _run(strategy(LONG_ENTRY, LONG_EXIT), should_stop=should_stop, check_every=2)
+        _run(strategy(LONG_ENTRY, LONG_EXIT), checkpoint=checkpoint, check_every=2)
+    assert calls == [(0, 8), (2, 8)]

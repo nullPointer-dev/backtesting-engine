@@ -2,7 +2,7 @@ import logging
 import traceback
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.core.database import SessionLocal
 from app.enums.types import BacktestStatus
@@ -16,8 +16,15 @@ from app.backtesting.indicator_preloader import IndicatorPreloader
 from app.backtesting.execution_engine import BacktestCancelled, ExecutionEngine
 from app.backtesting.portfolio_engine import PortfolioEngine
 from app.backtesting.performance_metrics import PerformanceMetrics
+from app.strategy_engine.requirement_extractor import RequirementExtractor
+from app.backtesting.errors import summarize_error
 
 logger = logging.getLogger(__name__)
+
+
+def _describe_indicator(name: str, params: tuple) -> str:
+    values = ", ".join(f"{value:g}" if isinstance(value, float) else str(value) for _, value in params)
+    return f"{name}({values})" if values else name
 
 
 def _to_datetime(value):
@@ -28,14 +35,24 @@ class BacktestRunner:
     def __init__(self, backtest_id: int):
         self.backtest_id = backtest_id
 
-    def _current_status(self) -> BacktestStatus | None:
-        with SessionLocal() as session:
-            return session.scalar(
-                select(Backtest.status).where(Backtest.backtest_id == self.backtest_id)
-            )
+    def _checkpoint(self, stage: str, pct: float, message: str) -> bool:
+        """Record progress in its own transaction; return True if the run was cancelled.
 
-    def _is_cancelled(self) -> bool:
-        return self._current_status() == BacktestStatus.CANCELLED
+        The cancel endpoint and this runner share one row, so progress is only
+        written while the backtest is still RUNNING.
+        """
+        with SessionLocal() as session:
+            updated = session.execute(
+                update(Backtest)
+                .where(
+                    Backtest.backtest_id == self.backtest_id,
+                    Backtest.status == BacktestStatus.RUNNING,
+                )
+                .values(progress_pct=round(pct, 1), progress_stage=stage, progress_message=message)
+                .returning(Backtest.backtest_id)
+            ).first()
+            session.commit()
+        return updated is None
 
     def run(self):
         session = SessionLocal()
@@ -52,6 +69,9 @@ class BacktestRunner:
             backtest.started_at = datetime.now(timezone.utc)
             backtest.completed_at = None
             backtest.error_message = None
+            backtest.progress_pct = 0.0
+            backtest.progress_stage = "starting"
+            backtest.progress_message = "job started"
             # A re-run replaces the trades of any earlier attempt.
             session.execute(delete(Trade).where(Trade.backtest_id == backtest.backtest_id))
             session.commit()
@@ -65,6 +85,12 @@ class BacktestRunner:
                 raise ValueError("Invalid strategy: " + "; ".join(validation.errors))
             strategy_definition = validation.definition
 
+            span = f"{backtest.start_date:%Y-%m-%d} → {backtest.end_date:%Y-%m-%d}"
+            if self._checkpoint(
+                "loading", 3, f"loading {backtest.symbol} {backtest.timeframe.value} candles · {span}"
+            ):
+                raise BacktestCancelled()
+
             dataframe = MarketDataLoader().load(
                 symbol=backtest.symbol,
                 timeframe=backtest.timeframe,
@@ -77,18 +103,37 @@ class BacktestRunner:
                     f"between {backtest.start_date:%Y-%m-%d} and {backtest.end_date:%Y-%m-%d}"
                 )
 
+            requirements = RequirementExtractor().extract(strategy_definition)
+            indicator_names = ", ".join(sorted(_describe_indicator(n, p) for n, p in requirements))
+            if self._checkpoint(
+                "indicators", 8,
+                f"{len(dataframe)} bars loaded · preloading indicators: {indicator_names or 'none'}",
+            ):
+                raise BacktestCancelled()
+
             indicator_cache = IndicatorPreloader(dataframe, strategy_definition).preload()
+
+            def on_bar(index: int, total: int) -> bool:
+                pct = 10 + 70 * index / max(total, 1)
+                return self._checkpoint("signals", pct, f"evaluating rules · bar {index:,} / {total:,}")
 
             raw_trades = ExecutionEngine(
                 symbol=backtest.symbol,
                 dataframe=dataframe,
                 strategy=strategy_definition,
                 indicator_cache=indicator_cache,
-            ).run(should_stop=self._is_cancelled)
+            ).run(checkpoint=on_bar)
 
             logger.info(
                 "Backtest %s: %d bars, %d trades", self.backtest_id, len(dataframe), len(raw_trades)
             )
+
+            if self._checkpoint(
+                "portfolio", 82,
+                f"{len(raw_trades)} signal trades · simulating portfolio: "
+                f"{backtest.commission_pct:g}% commission, {backtest.slippage_pct:g}% slippage",
+            ):
+                raise BacktestCancelled()
 
             portfolio = PortfolioEngine(
                 initial_capital=backtest.initial_capital,
@@ -99,6 +144,9 @@ class BacktestRunner:
                 slippage_pct=backtest.slippage_pct,
             ).run(dataframe, raw_trades)
 
+            if self._checkpoint("metrics", 90, "computing metrics: sharpe, sortino, drawdown, MAE/MFE"):
+                raise BacktestCancelled()
+
             metrics = PerformanceMetrics(
                 trades=portfolio["trades"],
                 equity=portfolio["equity"],
@@ -107,7 +155,9 @@ class BacktestRunner:
                 timeframe=backtest.timeframe,
             ).calculate()
 
-            if self._is_cancelled():
+            if self._checkpoint(
+                "saving", 96, f"saving {len(portfolio['trades'])} trades and the equity curve"
+            ):
                 raise BacktestCancelled()
 
             for trade in portfolio["trades"]:
@@ -139,6 +189,9 @@ class BacktestRunner:
             backtest.exposure_pct = portfolio["exposure_pct"]
             backtest.skipped_trades = portfolio["skipped_trades"]
             backtest.status = BacktestStatus.COMPLETED
+            backtest.progress_pct = 100.0
+            backtest.progress_stage = "done"
+            backtest.progress_message = "completed"
             backtest.completed_at = datetime.now(timezone.utc)
             session.commit()
 
@@ -156,6 +209,8 @@ class BacktestRunner:
             if backtest and backtest.status != BacktestStatus.CANCELLED:
                 backtest.status = BacktestStatus.FAILED
                 backtest.error_message = traceback.format_exc()
+                backtest.progress_stage = "failed"
+                backtest.progress_message = summarize_error(backtest.error_message)
                 backtest.completed_at = datetime.now(timezone.utc)
                 session.commit()
             raise

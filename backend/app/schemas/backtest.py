@@ -3,6 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.backtesting.errors import summarize_error
 from app.enums.types import BacktestStatus, PositionSizingType, TimeFrame
 
 
@@ -90,16 +91,22 @@ class BacktestSummary(BaseModel):
     win_rate: Optional[float]
     profit_factor: Optional[float]
     total_trades: Optional[int]
+    progress_pct: Optional[float] = None
+    progress_stage: Optional[str] = None
+    error_summary: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
-    def add_strategy_name(cls, data):
+    def add_derived_fields(cls, data):
+        """From an ORM row: add the strategy name and a one-line error summary."""
+        if isinstance(data, dict):
+            return data
+        derived = {"strategy_name", "error_summary"}
+        fields = {name: getattr(data, name, None) for name in cls.model_fields if name not in derived}
         strategy = getattr(data, "strategy", None)
-        if strategy is not None and not isinstance(data, dict):
-            fields = {name: getattr(data, name, None) for name in cls.model_fields if name != "strategy_name"}
-            fields["strategy_name"] = strategy.name
-            return fields
-        return data
+        fields["strategy_name"] = strategy.name if strategy is not None else None
+        fields["error_summary"] = summarize_error(getattr(data, "error_message", None))
+        return fields
 
 
 class BacktestResponse(BacktestSummary):
@@ -128,6 +135,8 @@ class BacktestResponse(BacktestSummary):
 class BacktestListResponse(BaseModel):
     backtests: list[BacktestSummary]
     total: int
+    # Backtests per status for the same strategy filter, ignoring the status filter.
+    status_counts: dict[str, int] = {}
 
 
 class BacktestRunResponse(BaseModel):
@@ -141,7 +150,20 @@ class BacktestStatusResponse(BaseModel):
     status: BacktestStatus
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
+    progress_pct: Optional[float] = None
+    progress_stage: Optional[str] = None
+    progress_message: Optional[str] = None
     error_message: Optional[str]
+    error_summary: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def add_error_summary(cls, data):
+        if isinstance(data, dict):
+            return data
+        fields = {name: getattr(data, name, None) for name in cls.model_fields if name != "error_summary"}
+        fields["error_summary"] = summarize_error(fields.get("error_message"))
+        return fields
 
 
 class EquityCurveResponse(BaseModel):
@@ -192,6 +214,8 @@ class DashboardSummary(BaseModel):
     completed_backtests: int
     running_backtests: int
     failed_backtests: int
+    pending_backtests: int = 0
+    cancelled_backtests: int = 0
     total_strategies: int
     best_return: Optional[float]
     worst_return: Optional[float]

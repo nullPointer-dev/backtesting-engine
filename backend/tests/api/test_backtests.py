@@ -107,7 +107,11 @@ def test_failure_is_recorded(client, auth, strategy_id, database):
     assert client.post(f"/backtests/{backtest_id}/run", headers=auth).status_code == 200
     status = client.get(f"/backtests/{backtest_id}/status", headers=auth).json()
     assert status["status"] == "FAILED"
-    assert "Invalid strategy" in status["error_message"]
+    assert "Traceback" in status["error_message"]
+    assert status["error_summary"].startswith("Invalid strategy: long_entry: Field required")
+    assert status["progress_stage"] == "failed"
+    listed = client.get("/backtests?status=FAILED", headers=auth).json()["backtests"][0]
+    assert listed["error_summary"] == status["error_summary"]
 
 
 # ---------------------------------------------------------------- analytics
@@ -196,3 +200,89 @@ def test_backtests_are_private(client, make_user, auth, completed_backtest):
     assert client.post(f"/backtests/{backtest_id}/cancel", headers=other).status_code == 404
     assert client.delete(f"/backtests/{backtest_id}", headers=other).status_code == 404
     assert client.get("/backtests/dashboard/summary", headers=other).json()["total_backtests"] == 0
+
+
+# ---------------------------------------------------------------- progress and summaries
+
+def test_completed_run_reports_full_progress(client, auth, completed_backtest):
+    status = client.get(f"/backtests/{completed_backtest['backtest_id']}/status", headers=auth).json()
+    assert status["progress_pct"] == 100
+    assert status["progress_stage"] == "done"
+    assert status["error_summary"] is None
+
+
+def test_runner_reports_each_stage(client, auth, strategy_id, monkeypatch):
+    from app.backtesting.backtest_runner import BacktestRunner
+
+    seen = []
+    original = BacktestRunner._checkpoint
+
+    def recording(self, stage, pct, message):
+        seen.append((stage, pct, message))
+        return original(self, stage, pct, message)
+
+    monkeypatch.setattr(BacktestRunner, "_checkpoint", recording)
+    backtest_id = _create(client, auth, strategy_id).json()["backtest_id"]
+    client.post(f"/backtests/{backtest_id}/run", headers=auth)
+
+    stages = [stage for stage, _, _ in seen]
+    assert stages[:2] == ["loading", "indicators"]
+    assert stages[-3:] == ["portfolio", "metrics", "saving"]
+    assert "signals" in stages
+    percents = [pct for _, pct, _ in seen]
+    assert percents == sorted(percents) and percents[-1] < 100
+    assert "SMA(10), SMA(30)" in seen[1][2]
+
+
+def test_cancel_during_run_saves_nothing(client, auth, strategy_id, database, monkeypatch):
+    from sqlalchemy import text
+
+    from app.backtesting.backtest_runner import BacktestRunner
+
+    original = BacktestRunner._checkpoint
+
+    def cancel_while_evaluating(self, stage, pct, message):
+        if stage == "signals":
+            with database.begin() as connection:
+                connection.execute(
+                    text("UPDATE backtests SET status = 'CANCELLED' WHERE backtest_id = :id"),
+                    {"id": self.backtest_id},
+                )
+        return original(self, stage, pct, message)
+
+    monkeypatch.setattr(BacktestRunner, "_checkpoint", cancel_while_evaluating)
+    backtest_id = _create(client, auth, strategy_id).json()["backtest_id"]
+    client.post(f"/backtests/{backtest_id}/run", headers=auth)
+
+    body = client.get(f"/backtests/{backtest_id}", headers=auth).json()
+    assert body["status"] == "CANCELLED"
+    assert body["total_trades"] is None and body["equity_curve"] == []
+    assert client.get(f"/backtests/{backtest_id}/trades", headers=auth).json()["total"] == 0
+
+
+def test_cancel_marks_progress(client, auth, strategy_id):
+    backtest_id = _create(client, auth, strategy_id).json()["backtest_id"]
+    body = client.post(f"/backtests/{backtest_id}/cancel", headers=auth).json()
+    assert body["progress_stage"] == "cancelled"
+    assert body["error_summary"] == "Cancelled by user"
+
+
+def test_status_counts_follow_the_strategy_filter(client, auth, strategy_id, completed_backtest):
+    from tests.api.conftest import SMA_CROSS
+
+    other = client.post("/strategies", json={"name": "other", "strategy_json": SMA_CROSS}, headers=auth).json()
+    _create(client, auth, other["strategy_id"])
+    pending_id = _create(client, auth, strategy_id).json()["backtest_id"]
+    client.post(f"/backtests/{pending_id}/cancel", headers=auth)
+
+    everything = client.get("/backtests?status=COMPLETED", headers=auth).json()
+    assert everything["total"] == 1
+    assert everything["status_counts"] == {
+        "PENDING": 1, "RUNNING": 0, "COMPLETED": 1, "FAILED": 0, "CANCELLED": 1,
+    }
+
+    mine = client.get(f"/backtests?strategy_id={strategy_id}", headers=auth).json()
+    assert mine["status_counts"]["PENDING"] == 0 and mine["status_counts"]["CANCELLED"] == 1
+
+    dashboard = client.get("/backtests/dashboard/summary", headers=auth).json()
+    assert dashboard["pending_backtests"] == 1 and dashboard["cancelled_backtests"] == 1

@@ -312,24 +312,30 @@ Queues the backtest and returns immediately:
 { "backtest_id": 7, "status": "RUNNING", "message": "Backtest started in background" }
 ```
 
-Poll `/status` until it leaves `RUNNING`. 400 if it is already running or completed.
+Poll `/status` until it leaves `RUNNING`; while it runs, `progress_pct`, `progress_stage` and `progress_message` say how far it has got. 400 if it is already running or completed.
 
 Backtests run in separate worker processes (`BACKTEST_WORKERS`, default 2). If the server stops mid-run, the backtest is marked `FAILED` on the next start.
 
 ### `GET /backtests/{backtest_id}/status`
 
 ```json
-{ "backtest_id": 7, "status": "FAILED", "started_at": "...", "completed_at": "...",
-  "error_message": "Traceback (most recent call last): ..." }
+{ "backtest_id": 7, "status": "RUNNING", "started_at": "...", "completed_at": null,
+  "progress_pct": 41.3, "progress_stage": "signals",
+  "progress_message": "evaluating rules · bar 1,000 / 2,221",
+  "error_message": null, "error_summary": null }
 ```
+
+`progress_stage` moves through `queued` → `starting` → `loading` → `indicators` → `signals` → `portfolio` → `metrics` → `saving` → `done` (100%). A failed run ends at `failed`, a cancelled one at `cancelled`. `progress_message` is a one-line, human-readable log entry for the current stage.
+
+On failure, `error_message` holds the full traceback and `error_summary` just the final message, e.g. `"No market data for TCS.NS (1d) between 2020-01-01 and 2021-01-01"`.
 
 ### `POST /backtests/{backtest_id}/cancel`
 
-Cancels a `PENDING` or `RUNNING` backtest. A running job stops at its next check (every 250 bars) and saves nothing. Returns the status object with `"status": "CANCELLED"`.
+Cancels a `PENDING` or `RUNNING` backtest. A running job stops at its next checkpoint (between stages, and every 250 bars while evaluating rules) and saves nothing. Returns the status object with `"status": "CANCELLED"`.
 
 ### `GET /backtests`
 
-Query: `strategy_id`, `status`, `skip` (0), `limit` (100, max 1000). Newest first. Returns summaries (no equity curve):
+Query: `strategy_id`, `status`, `skip` (0), `limit` (100, max 1000). Newest first. Returns summaries (no equity curve), plus `status_counts`: the number of backtests in each status for the same `strategy_id` filter, ignoring `status` (for filter tabs):
 
 ```json
 {
@@ -343,10 +349,12 @@ Query: `strategy_id`, `status`, `skip` (0), `limit` (100, max 1000). Newest firs
       "commission_pct": 0.05, "slippage_pct": 0.02,
       "final_capital": 164471.9, "total_return": 64.47, "net_profit": 64471.9, "cagr": 5.69,
       "sharpe_ratio": 0.84, "max_drawdown": -15.12, "win_rate": 64.29, "profit_factor": 2.62,
-      "total_trades": 28
+      "total_trades": 28,
+      "progress_pct": 100.0, "progress_stage": "done", "error_summary": null
     }
   ],
-  "total": 1
+  "total": 1,
+  "status_counts": { "PENDING": 0, "RUNNING": 0, "COMPLETED": 1, "FAILED": 0, "CANCELLED": 0 }
 }
 ```
 
@@ -450,7 +458,8 @@ Download. `json` contains the full backtest and all trades; `csv` contains the t
 
 ```json
 {
-  "total_backtests": 12, "completed_backtests": 10, "running_backtests": 0, "failed_backtests": 1,
+  "total_backtests": 12, "completed_backtests": 9, "running_backtests": 0, "failed_backtests": 1,
+  "pending_backtests": 1, "cancelled_backtests": 1,
   "total_strategies": 3,
   "best_return": 64.47, "worst_return": -8.2, "avg_return": 21.3,
   "recent_backtests": [ { "...": "summary" } ]

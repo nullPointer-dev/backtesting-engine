@@ -141,6 +141,13 @@ class Backtest(Base):
 
     error_message: Mapped[str | None] = mapped_column(Text)
 
+    # Live progress while RUNNING: 0-100, a short stage key and a log line.
+    progress_pct: Mapped[float | None] = mapped_column(Double)
+
+    progress_stage: Mapped[str | None] = mapped_column(String(32))
+
+    progress_message: Mapped[str | None] = mapped_column(Text)
+
     strategy: Mapped[Strategy] = relationship(
         back_populates="backtests",
         lazy="selectin"
