@@ -4,6 +4,7 @@ import { ApiError } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
 import { Logo } from '../components/Logo'
 import { ErrorNote } from '../components/ui'
+import { chipClass, inputClass } from '../lib/styles'
 
 type Mode = 'login' | 'register'
 
@@ -54,8 +55,6 @@ export function Login() {
     }
   }
 
-  const input =
-    'h-11 rounded-md border border-line-strong bg-canvas px-3 text-sm text-ink placeholder:text-subtle [color-scheme:dark]'
 
   return (
     <div className="flex min-h-screen flex-wrap bg-canvas">
@@ -76,7 +75,7 @@ export function Login() {
             Chain conditions with AND / OR, pick from 24 indicators, and replay the strategy on NSE candles.
           </p>
         </div>
-        <div className="mt-auto max-w-[520px] rounded-md border border-line bg-canvas px-[22px] py-5 text-[13px] leading-[1.75]">
+        <div className="mt-auto max-w-[520px] rounded-xl border border-line bg-canvas px-[22px] py-5 font-mono text-[13px] leading-[1.75]">
           <div className="mb-3 flex gap-1.5" aria-hidden="true">
             {[0, 1, 2].map((i) => (
               <span key={i} className="size-[9px] rounded-full bg-line-strong" />
@@ -113,9 +112,7 @@ export function Login() {
                     setMode(value)
                     setErrors([])
                   }}
-                  className={`h-11 flex-1 cursor-pointer rounded-md border text-[13px] font-semibold ${
-                    on ? 'border-ink bg-ink text-canvas' : 'border-line-strong bg-panel text-ink hover:border-ink'
-                  }`}
+                  className={chipClass(on, 'flex-1')}
                 >
                   {label}
                 </button>
@@ -134,7 +131,7 @@ export function Login() {
               </label>
               <input
                 id="user"
-                className={input}
+                className={inputClass}
                 autoComplete="username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -150,7 +147,7 @@ export function Login() {
               <input
                 id="pw"
                 type="password"
-                className={input}
+                className={inputClass}
                 autoComplete={login ? 'current-password' : 'new-password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -162,7 +159,7 @@ export function Login() {
             <button
               type="submit"
               disabled={busy || !username.trim() || !password}
-              className="h-12 cursor-pointer rounded-md bg-ink text-sm font-semibold text-canvas hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+              className="press h-12 cursor-pointer rounded-full bg-ink text-sm font-semibold text-canvas hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy ? 'Working…' : login ? 'Sign in' : 'Create account'}
             </button>

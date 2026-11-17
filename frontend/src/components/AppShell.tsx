@@ -57,7 +57,7 @@ export function AppShell() {
               key={to}
               to={to}
               className={({ isActive }) =>
-                `flex items-center gap-3 rounded-md p-3 text-sm hover:bg-panel-2 ${
+                `flex items-center gap-3 rounded-xl p-3 text-sm hover:bg-panel-2 ${
                   isActive ? 'bg-panel-2 font-semibold text-ink' : 'font-medium text-muted'
                 }`
               }
@@ -76,7 +76,7 @@ export function AppShell() {
               onClick={signOut}
               aria-label="Sign out"
               title="Sign out"
-              className="inline-flex size-9 cursor-pointer items-center justify-center rounded-md text-subtle hover:bg-panel-2 hover:text-ink"
+              className="inline-flex size-9 cursor-pointer items-center justify-center rounded-full text-subtle hover:bg-panel-2 hover:text-ink"
             >
               <SignOutIcon />
             </button>

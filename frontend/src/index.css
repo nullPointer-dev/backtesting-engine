@@ -1,31 +1,36 @@
 @import "tailwindcss";
 
-/* Design tokens from the "Backtesting Engine Dashboard" canvas. */
+/* Design tokens from the "Backtesting Dashboard – Trading UI" canvas. */
 @theme {
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-sans: var(--font-mono);
 
-  --color-canvas: #0b0e13;      /* page background */
-  --color-raised: #0f131a;      /* marketing / sign-in side panel */
-  --color-panel: #12161d;       /* cards, sidebar, tables */
-  --color-row-hover: #171c25;
-  --color-panel-2: #1b212b;     /* active nav, neutral chips, row rules */
-  --color-line: #232a35;        /* panel borders */
-  --color-line-strong: #2f3846; /* inputs, secondary buttons */
+  --color-canvas: #070708;      /* page background */
+  --color-raised: #0a0a0b;      /* sign-in side panel */
+  --color-panel: #0e0e10;       /* cards, sidebar, tables */
+  --color-row-hover: #141417;
+  --color-panel-3: #161619;     /* condition rows */
+  --color-panel-2: #19191c;     /* active nav, neutral chips, row rules */
+  --color-line: #212126;        /* panel borders */
+  --color-line-hover: #2c2c33;
+  --color-line-strong: #303037; /* inputs, secondary buttons */
+  --color-line-focus: #45454d;  /* input hover */
 
-  --color-ink: #e6eaf0;         /* primary text, primary button */
-  --color-ink-2: #c9d1dc;       /* code */
-  --color-muted: #a3adbb;       /* secondary text */
-  --color-subtle: #8892a0;      /* labels, captions */
+  --color-ink: #f2f2f4;         /* primary text, primary button */
+  --color-ink-2: #d0d0d6;       /* code */
+  --color-muted: #a4a4ac;       /* secondary text */
+  --color-subtle: #8e8e96;      /* labels, captions */
+  --color-faint: #76767e;
 
-  --color-gain: #36d6b0;        /* positive values, COMPLETED */
-  --color-loss: #ff8a4c;        /* negative values, FAILED, destructive */
-  --color-loss-soft: #ffb48a;
-  --color-info: #6aa7ff;        /* RUNNING, links in code, focus ring */
-  --color-violet: #b794f6;      /* long + short, logical operators */
+  --color-gain: #2ebd85;        /* positive values, COMPLETED, valid */
+  --color-loss: #f0544f;        /* negative values, FAILED, destructive */
+  --color-loss-soft: #ff9e9a;
+  --color-info: #6aa7ff;        /* RUNNING, AND groups, focus ring */
+  --color-info-soft: #a9c9ff;
+  --color-violet: #b794f6;      /* OR groups, long + short */
+  --color-warn: #ffc857;
 
-  --radius-sm: 3px;
-  --radius-md: 4px;
+  --radius-card: 12px;
 }
 
 @layer base {
@@ -34,15 +39,33 @@
     margin: 0;
     background: var(--color-canvas);
     color: var(--color-ink);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+  ::selection { background: rgb(106 167 255 / 0.35); }
   a { color: inherit; text-decoration: none; }
   input, select, textarea, button { font: inherit; color: inherit; }
-  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  button, a, input, select, textarea {
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease, transform .1s ease;
+  }
+  button:not(:disabled):active, a.press:active { transform: scale(0.97); }
+  :where(a, button, [tabindex]):focus-visible {
     outline: 2px solid var(--color-info);
     outline-offset: 2px;
+  }
+  :where(input, select, textarea):hover { border-color: var(--color-line-focus); }
+  :where(input, select, textarea):focus {
+    outline: none;
+    border-color: var(--color-info) !important;
+    box-shadow: 0 0 0 3px rgb(106 167 255 / 0.22);
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #26262b; border-radius: 999px; border: 2px solid var(--color-canvas); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
   }
 }
 

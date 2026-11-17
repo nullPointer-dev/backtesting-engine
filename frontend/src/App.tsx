@@ -1,7 +1,10 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { RedirectIfSignedIn, RequireAuth } from './auth/RequireAuth'
 import { AppShell } from './components/AppShell'
+import { Builder } from './pages/Builder'
 import { Login } from './pages/Login'
+import { Overview } from './pages/Overview'
+import { Strategies } from './pages/Strategies'
 import { NotFound } from './pages/NotFound'
 import { Placeholder } from './pages/Placeholder'
 
@@ -15,10 +18,10 @@ export default function App() {
 
       <Route element={<RequireAuth />}>
         <Route element={<AppShell />}>
-          <Route path="/overview" element={<Placeholder title="Overview" />} />
-          <Route path="/strategies" element={<Placeholder title="Strategies" />} />
-          <Route path="/strategies/new" element={<Placeholder title="Strategy builder" />} />
-          <Route path="/strategies/:strategyId" element={<Placeholder title="Edit strategy" />} />
+          <Route path="/overview" element={<Overview />} />
+          <Route path="/strategies" element={<Strategies />} />
+          <Route path="/strategies/new" element={<Builder />} />
+          <Route path="/strategies/:strategyId" element={<Builder key="edit" />} />
           <Route path="/backtests" element={<Placeholder title="Backtests" />} />
           <Route path="/backtests/new" element={<Placeholder title="New backtest" />} />
           <Route path="/backtests/:backtestId" element={<Placeholder title="Backtest results" />} />
