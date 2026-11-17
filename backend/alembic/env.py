@@ -11,7 +11,10 @@ from app.core.config import DB_URL
 from app.models import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", DB_URL)
+# `alembic -x db_url=postgresql://... upgrade head` targets another database (e.g. tests).
+config.set_main_option(
+    "sqlalchemy.url", context.get_x_argument(as_dictionary=True).get("db_url", DB_URL)
+)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -41,7 +44,7 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, target_metadata=target_metadata, compare_type=True
         )
 
         with context.begin_transaction():

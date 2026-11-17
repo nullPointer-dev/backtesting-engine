@@ -3,6 +3,10 @@ from app.enums.types import PositionSide
 from app.strategy_engine.evaluator import Evaluator
 
 
+class BacktestCancelled(Exception):
+    """Raised when a running backtest is cancelled by the user."""
+
+
 class ExecutionEngine:
 
     def __init__(self, symbol: str, dataframe, strategy, indicator_cache):
@@ -11,11 +15,14 @@ class ExecutionEngine:
         self.strategy = strategy
         self.evaluator = Evaluator(dataframe, indicator_cache)
 
-    def run(self):
+    def run(self, should_stop=None, check_every: int = 250):
         trades = []
         position = None
 
         for index in range(len(self.dataframe) - 1):
+            if should_stop is not None and index % check_every == 0 and should_stop():
+                raise BacktestCancelled()
+
             if position is None:
                 if self.evaluator.evaluate(self.strategy.long_entry, index):
                     position = {

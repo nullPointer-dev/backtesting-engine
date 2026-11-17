@@ -23,7 +23,7 @@ class PositionSide(str, Enum):
 
 class PositionSizingType(str, Enum):
     FIXED_QUANTITY = "FIXED_QUANTITY"
-    PERCENT_OF_CAPITAL = ("PERCENT_OF_CAPITAL")
+    PERCENT_OF_CAPITAL = "PERCENT_OF_CAPITAL"
 
 class TimeFrame(str, Enum):
     ONE_MINUTE = "1m"
@@ -39,3 +39,4 @@ class BacktestStatus(str, Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"

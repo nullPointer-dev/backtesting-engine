@@ -1,50 +1,84 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
-from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-from typing import Optional, List
-from datetime import datetime
-from decimal import Decimal
-import io
 import csv
+import io
 import json
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Optional
 
-from app.core.database import SessionLocal
+import numpy as np
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
 from app.api.auth import get_current_user
-from app.models.user import User
-from app.models.strategy import Strategy
-from app.models.backtest import Backtest
-from app.models.trade import Trade
-from app.enums.types import BacktestStatus
 from app.backtesting.backtest_runner import BacktestRunner
+from app.core.database import get_db
+from app.enums.types import BacktestStatus
+from app.models.backtest import Backtest
+from app.models.market_data import MarketData
+from app.models.strategy import Strategy
+from app.models.trade import Trade
+from app.models.user import User
 from app.schemas.backtest import (
     BacktestCreate,
-    BacktestResponse,
     BacktestListResponse,
+    BacktestResponse,
     BacktestRunResponse,
+    BacktestStatusResponse,
+    CompareRequest,
+    CompareResponse,
+    DashboardSummary,
+    DrawdownResponse,
+    EquityCurveResponse,
+    HistogramBucket,
+    PeriodReturn,
+    ReturnsBreakdownResponse,
+    TradeAnalysisResponse,
 )
-from app.schemas.trade import TradeResponse, TradeListResponse
+from app.schemas.trade import TradeListResponse
 
 router = APIRouter(prefix="/backtests", tags=["backtests"])
 
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+RUNNABLE_STATUSES = {BacktestStatus.PENDING, BacktestStatus.FAILED, BacktestStatus.CANCELLED}
 
 
-def run_backtest_background(backtest_id: int):
-    """Background task to run backtest."""
-    from app.core.database import SessionLocal
-    db = SessionLocal()
-    try:
-        runner = BacktestRunner(backtest_id=backtest_id)
-        runner.run()
-    finally:
-        db.close()
+def _user_backtests(db: Session, user: User):
+    return db.query(Backtest).join(Strategy).filter(Strategy.user_id == user.user_id)
 
+
+def _get_owned_backtest(db: Session, user: User, backtest_id: int) -> Backtest:
+    backtest = _user_backtests(db, user).filter(Backtest.backtest_id == backtest_id).first()
+    if not backtest:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backtest not found")
+    return backtest
+
+
+def _closed_trades(db: Session, backtest_id: int) -> list[Trade]:
+    return (
+        db.query(Trade)
+        .filter(Trade.backtest_id == backtest_id, Trade.exit_time.isnot(None))
+        .order_by(Trade.exit_time.asc(), Trade.trade_id.asc())
+        .all()
+    )
+
+
+def _histogram(values: list[float], bins: int, integer: bool = False) -> list[HistogramBucket]:
+    counts, edges = np.histogram(np.asarray(values, dtype=float), bins=bins)
+    fmt = (lambda x: f"{int(round(x))}") if integer else (lambda x: f"{x:.2f}")
+    return [
+        HistogramBucket(range=f"{fmt(edges[i])} to {fmt(edges[i + 1])}", count=int(counts[i]))
+        for i in range(len(counts))
+    ]
+
+
+def run_backtest_job(backtest_id: int):
+    BacktestRunner(backtest_id=backtest_id).run()
+
+
+# --------------------------------------------------------------------------
+# Collection routes
+# --------------------------------------------------------------------------
 
 @router.post("", response_model=BacktestResponse, status_code=status.HTTP_201_CREATED)
 def create_backtest(
@@ -57,34 +91,27 @@ def create_backtest(
         Strategy.user_id == current_user.user_id,
     ).first()
     if not strategy:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Strategy not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
 
-    if backtest_in.position_sizing_type.value == "FIXED_QUANTITY" and backtest_in.quantity is None:
+    has_data = db.query(MarketData.market_data_id).filter(
+        MarketData.symbol == backtest_in.symbol,
+        MarketData.timeframe == backtest_in.timeframe,
+        MarketData.datetime >= backtest_in.start_date,
+        MarketData.datetime <= backtest_in.end_date,
+    ).first()
+    if not has_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="quantity is required for FIXED_QUANTITY position sizing",
-        )
-    if backtest_in.position_sizing_type.value == "PERCENT_OF_CAPITAL" and backtest_in.position_size_percent is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="position_size_percent is required for PERCENT_OF_CAPITAL position sizing",
+            detail=(
+                f"No market data for {backtest_in.symbol} ({backtest_in.timeframe.value}) "
+                "in the selected date range"
+            ),
         )
 
     backtest = Backtest(
-        strategy_id=backtest_in.strategy_id,
+        **backtest_in.model_dump(),
         status=BacktestStatus.PENDING,
-        created_at=datetime.now(),
-        start_date=backtest_in.start_date,
-        end_date=backtest_in.end_date,
-        initial_capital=backtest_in.initial_capital,
-        symbol=backtest_in.symbol,
-        timeframe=backtest_in.timeframe,
-        position_sizing_type=backtest_in.position_sizing_type,
-        quantity=backtest_in.quantity,
-        position_size_percent=backtest_in.position_size_percent,
+        created_at=datetime.now(timezone.utc),
     )
     db.add(backtest)
     db.commit()
@@ -95,21 +122,82 @@ def create_backtest(
 @router.get("", response_model=BacktestListResponse)
 def list_backtests(
     strategy_id: Optional[int] = Query(None),
-    status: Optional[BacktestStatus] = Query(None),
+    status_filter: Optional[BacktestStatus] = Query(None, alias="status"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Backtest).join(Strategy).filter(Strategy.user_id == current_user.user_id)
-    if strategy_id:
+    query = _user_backtests(db, current_user)
+    if strategy_id is not None:
         query = query.filter(Backtest.strategy_id == strategy_id)
-    if status:
-        query = query.filter(Backtest.status == status)
+    if status_filter is not None:
+        query = query.filter(Backtest.status == status_filter)
     total = query.count()
     backtests = query.order_by(Backtest.created_at.desc()).offset(skip).limit(limit).all()
     return BacktestListResponse(backtests=backtests, total=total)
 
+
+@router.get("/dashboard/summary", response_model=DashboardSummary)
+def get_dashboard_summary(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    counts = dict(
+        _user_backtests(db, current_user)
+        .with_entities(Backtest.status, func.count())
+        .group_by(Backtest.status)
+        .all()
+    )
+    best, worst, average = (
+        _user_backtests(db, current_user)
+        .filter(Backtest.status == BacktestStatus.COMPLETED)
+        .with_entities(
+            func.max(Backtest.total_return),
+            func.min(Backtest.total_return),
+            func.avg(Backtest.total_return),
+        )
+        .one()
+    )
+    total_strategies = db.query(Strategy).filter(Strategy.user_id == current_user.user_id).count()
+    recent = _user_backtests(db, current_user).order_by(Backtest.created_at.desc()).limit(5).all()
+
+    return DashboardSummary(
+        total_backtests=sum(counts.values()),
+        completed_backtests=counts.get(BacktestStatus.COMPLETED, 0),
+        running_backtests=counts.get(BacktestStatus.RUNNING, 0),
+        failed_backtests=counts.get(BacktestStatus.FAILED, 0),
+        total_strategies=total_strategies,
+        best_return=float(best) if best is not None else None,
+        worst_return=float(worst) if worst is not None else None,
+        avg_return=float(average) if average is not None else None,
+        recent_backtests=recent,
+    )
+
+
+@router.post("/compare", response_model=CompareResponse)
+def compare_backtests(
+    request: CompareRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    backtests = _user_backtests(db, current_user).filter(
+        Backtest.backtest_id.in_(request.backtest_ids),
+        Backtest.status == BacktestStatus.COMPLETED,
+    ).all()
+    if not backtests:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No completed backtests found for comparison",
+        )
+    order = {backtest_id: index for index, backtest_id in enumerate(request.backtest_ids)}
+    backtests.sort(key=lambda bt: order[bt.backtest_id])
+    return CompareResponse(comparison=backtests)
+
+
+# --------------------------------------------------------------------------
+# Single-backtest routes
+# --------------------------------------------------------------------------
 
 @router.get("/{backtest_id}", response_model=BacktestResponse)
 def get_backtest(
@@ -117,16 +205,24 @@ def get_backtest(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
+    return _get_owned_backtest(db, current_user, backtest_id)
+
+
+@router.delete("/{backtest_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_backtest(
+    backtest_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    backtest = _get_owned_backtest(db, current_user, backtest_id)
+    if backtest.status == BacktestStatus.RUNNING:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete a running backtest; cancel it first",
         )
-    return backtest
+    db.delete(backtest)
+    db.commit()
+    return None
 
 
 @router.post("/{backtest_id}/run", response_model=BacktestRunResponse)
@@ -136,37 +232,56 @@ def run_backtest(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
+    backtest = _get_owned_backtest(db, current_user, backtest_id)
     if backtest.status == BacktestStatus.RUNNING:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Backtest already running",
-        )
-    if backtest.status == BacktestStatus.COMPLETED:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Backtest already running")
+    if backtest.status not in RUNNABLE_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Backtest already completed. Create a new backtest to run again.",
         )
 
     backtest.status = BacktestStatus.RUNNING
-    backtest.started_at = datetime.now()
+    backtest.started_at = datetime.now(timezone.utc)
+    backtest.completed_at = None
+    backtest.error_message = None
     db.commit()
 
-    background_tasks.add_task(run_backtest_background, backtest_id)
+    background_tasks.add_task(run_backtest_job, backtest_id)
 
     return BacktestRunResponse(
         backtest_id=backtest_id,
         status=BacktestStatus.RUNNING,
         message="Backtest started in background",
     )
+
+
+@router.post("/{backtest_id}/cancel", response_model=BacktestStatusResponse)
+def cancel_backtest(
+    backtest_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    backtest = _get_owned_backtest(db, current_user, backtest_id)
+    if backtest.status not in (BacktestStatus.RUNNING, BacktestStatus.PENDING):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only pending or running backtests can be cancelled",
+        )
+    backtest.status = BacktestStatus.CANCELLED
+    backtest.error_message = "Cancelled by user"
+    backtest.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    return backtest
+
+
+@router.get("/{backtest_id}/status", response_model=BacktestStatusResponse)
+def get_backtest_status(
+    backtest_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return _get_owned_backtest(db, current_user, backtest_id)
 
 
 @router.get("/{backtest_id}/trades", response_model=TradeListResponse)
@@ -177,327 +292,122 @@ def get_backtest_trades(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
-
+    _get_owned_backtest(db, current_user, backtest_id)
     query = db.query(Trade).filter(Trade.backtest_id == backtest_id)
     total = query.count()
-    trades = query.order_by(Trade.entry_time.desc()).offset(skip).limit(limit).all()
+    trades = query.order_by(Trade.entry_time.asc(), Trade.trade_id.asc()).offset(skip).limit(limit).all()
     return TradeListResponse(trades=trades, total=total)
 
 
-@router.delete("/{backtest_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_backtest(
-    backtest_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
-    if backtest.status == BacktestStatus.RUNNING:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete running backtest",
-        )
-    db.delete(backtest)
-    db.commit()
-    return None
-
-
-@router.get("/{backtest_id}/equity-curve")
+@router.get("/{backtest_id}/equity-curve", response_model=EquityCurveResponse)
 def get_equity_curve(
     backtest_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
-    return {
-        "backtest_id": backtest_id,
-        "equity_curve": backtest.equity_curve or [],
-        "initial_capital": backtest.initial_capital,
-    }
+    backtest = _get_owned_backtest(db, current_user, backtest_id)
+    return EquityCurveResponse(
+        backtest_id=backtest_id,
+        initial_capital=backtest.initial_capital,
+        equity_curve=backtest.equity_curve or [],
+    )
 
 
-@router.get("/{backtest_id}/drawdown")
+@router.get("/{backtest_id}/drawdown", response_model=DrawdownResponse)
 def get_drawdown(
     backtest_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
-    
-    equity_curve = backtest.equity_curve or []
-    if not equity_curve:
-        return {"backtest_id": backtest_id, "drawdown": [], "max_drawdown": 0}
-    
-    import numpy as np
-    equity_array = np.array(equity_curve)
-    running_max = np.maximum.accumulate(equity_array)
-    drawdowns = ((equity_array - running_max) / running_max * 100).tolist()
-    max_drawdown = min(drawdowns) if drawdowns else 0
-    
-    return {
-        "backtest_id": backtest_id,
-        "drawdown": drawdowns,
-        "max_drawdown": max_drawdown,
-    }
+    backtest = _get_owned_backtest(db, current_user, backtest_id)
+    equity = np.asarray(backtest.equity_curve or [], dtype=float)
+    if equity.size == 0:
+        return DrawdownResponse(backtest_id=backtest_id, drawdown=[], max_drawdown=0.0)
+
+    running_max = np.maximum.accumulate(equity)
+    drawdowns = np.where(running_max > 0, (equity - running_max) / running_max * 100, 0.0)
+    return DrawdownResponse(
+        backtest_id=backtest_id,
+        drawdown=drawdowns.tolist(),
+        max_drawdown=float(drawdowns.min()),
+    )
 
 
-@router.get("/{backtest_id}/returns-breakdown")
+@router.get("/{backtest_id}/returns-breakdown", response_model=ReturnsBreakdownResponse)
 def get_returns_breakdown(
     backtest_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
-    
-    trades = db.query(Trade).filter(Trade.backtest_id == backtest_id).all()
-    if not trades:
-        return {"backtest_id": backtest_id, "monthly_returns": [], "yearly_returns": []}
-    
-    from collections import defaultdict
-    monthly_pnl = defaultdict(float)
-    yearly_pnl = defaultdict(float)
-    
+    backtest = _get_owned_backtest(db, current_user, backtest_id)
+    trades = _closed_trades(db, backtest_id)
+
+    monthly = defaultdict(float)
+    yearly = defaultdict(float)
     for trade in trades:
-        if trade.exit_time:
-            month_key = trade.exit_time.strftime("%Y-%m")
-            year_key = trade.exit_time.strftime("%Y")
-            monthly_pnl[month_key] += trade.pnl
-            yearly_pnl[year_key] += trade.pnl
-    
-    monthly_returns = [
-        {"period": k, "pnl": v, "return_pct": (v / backtest.initial_capital) * 100}
-        for k, v in sorted(monthly_pnl.items())
-    ]
-    yearly_returns = [
-        {"period": k, "pnl": v, "return_pct": (v / backtest.initial_capital) * 100}
-        for k, v in sorted(yearly_pnl.items())
-    ]
-    
-    return {
-        "backtest_id": backtest_id,
-        "monthly_returns": monthly_returns,
-        "yearly_returns": yearly_returns,
-    }
+        monthly[trade.exit_time.strftime("%Y-%m")] += trade.pnl or 0.0
+        yearly[trade.exit_time.strftime("%Y")] += trade.pnl or 0.0
+
+    def to_periods(totals: dict[str, float]) -> list[PeriodReturn]:
+        # Each period's return is measured against the capital at its start.
+        periods = []
+        capital = backtest.initial_capital
+        for period, pnl in sorted(totals.items()):
+            return_pct = (pnl / capital) * 100 if capital else 0.0
+            periods.append(PeriodReturn(period=period, pnl=pnl, return_pct=return_pct))
+            capital += pnl
+        return periods
+
+    return ReturnsBreakdownResponse(
+        backtest_id=backtest_id,
+        monthly_returns=to_periods(monthly),
+        yearly_returns=to_periods(yearly),
+    )
 
 
-@router.get("/{backtest_id}/trade-analysis")
+@router.get("/{backtest_id}/trade-analysis", response_model=TradeAnalysisResponse)
 def get_trade_analysis(
     backtest_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
-    
-    trades = db.query(Trade).filter(Trade.backtest_id == backtest_id).all()
+    _get_owned_backtest(db, current_user, backtest_id)
+    trades = _closed_trades(db, backtest_id)
     if not trades:
-        return {
-            "backtest_id": backtest_id,
-            "win_loss_distribution": {"wins": 0, "losses": 0},
-            "pnl_distribution": [],
-            "duration_distribution": [],
-            "mae_mfe": {"avg_mae": 0, "avg_mfe": 0},
-            "consecutive": {"max_wins": 0, "max_losses": 0},
-        }
-    
-    wins = [t for t in trades if t.pnl > 0]
-    losses = [t for t in trades if t.pnl < 0]
-    
-    pnl_values = [t.pnl for t in trades]
-    durations = [t.duration_bars for t in trades]
-    
-    import numpy as np
-    pnl_array = np.array(pnl_values)
-    duration_array = np.array(durations)
-    
-    pnl_hist, pnl_bins = np.histogram(pnl_array, bins=20)
-    duration_hist, duration_bins = np.histogram(duration_array, bins=20)
-    
-    pnl_distribution = [
-        {"range": f"{pnl_bins[i]:.2f} to {pnl_bins[i+1]:.2f}", "count": int(pnl_hist[i])}
-        for i in range(len(pnl_hist))
-    ]
-    duration_distribution = [
-        {"range": f"{int(duration_bins[i])} to {int(duration_bins[i+1])}", "count": int(duration_hist[i])}
-        for i in range(len(duration_hist))
-    ]
-    
-    max_consecutive_wins = 0
-    max_consecutive_losses = 0
-    current_wins = 0
-    current_losses = 0
-    for trade in trades:
-        if trade.pnl > 0:
-            current_wins += 1
-            current_losses = 0
-            max_consecutive_wins = max(max_consecutive_wins, current_wins)
-        elif trade.pnl < 0:
-            current_losses += 1
-            current_wins = 0
-            max_consecutive_losses = max(max_consecutive_losses, current_losses)
-    
-    return {
-        "backtest_id": backtest_id,
-        "win_loss_distribution": {"wins": len(wins), "losses": len(losses)},
-        "pnl_distribution": pnl_distribution,
-        "duration_distribution": duration_distribution,
-        "mae_mfe": {"avg_mae": 0, "avg_mfe": 0},
-        "consecutive": {"max_wins": max_consecutive_wins, "max_losses": max_consecutive_losses},
-    }
-
-
-@router.get("/dashboard/summary")
-def get_dashboard_summary(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    from sqlalchemy import func
-    
-    total_backtests = db.query(Backtest).join(Strategy).filter(
-        Strategy.user_id == current_user.user_id
-    ).count()
-    
-    completed_backtests = db.query(Backtest).join(Strategy).filter(
-        Strategy.user_id == current_user.user_id,
-        Backtest.status == BacktestStatus.COMPLETED
-    ).count()
-    
-    running_backtests = db.query(Backtest).join(Strategy).filter(
-        Strategy.user_id == current_user.user_id,
-        Backtest.status == BacktestStatus.RUNNING
-    ).count()
-    
-    failed_backtests = db.query(Backtest).join(Strategy).filter(
-        Strategy.user_id == current_user.user_id,
-        Backtest.status == BacktestStatus.FAILED
-    ).count()
-    
-    total_strategies = db.query(Strategy).filter(
-        Strategy.user_id == current_user.user_id
-    ).count()
-    
-    best_return = db.query(func.max(Backtest.total_return)).join(Strategy).filter(
-        Strategy.user_id == current_user.user_id,
-        Backtest.status == BacktestStatus.COMPLETED
-    ).scalar()
-    
-    worst_return = db.query(func.min(Backtest.total_return)).join(Strategy).filter(
-        Strategy.user_id == current_user.user_id,
-        Backtest.status == BacktestStatus.COMPLETED
-    ).scalar()
-    
-    avg_return = db.query(func.avg(Backtest.total_return)).join(Strategy).filter(
-        Strategy.user_id == current_user.user_id,
-        Backtest.status == BacktestStatus.COMPLETED
-    ).scalar()
-    
-    recent_backtests = db.query(Backtest).join(Strategy).filter(
-        Strategy.user_id == current_user.user_id
-    ).order_by(Backtest.created_at.desc()).limit(5).all()
-    
-    return {
-        "total_backtests": total_backtests,
-        "completed_backtests": completed_backtests,
-        "running_backtests": running_backtests,
-        "failed_backtests": failed_backtests,
-        "total_strategies": total_strategies,
-        "best_return": float(best_return) if best_return else None,
-        "worst_return": float(worst_return) if worst_return else None,
-        "avg_return": float(avg_return) if avg_return else None,
-        "recent_backtests": recent_backtests,
-    }
-
-
-@router.post("/compare")
-def compare_backtests(
-    backtest_ids: List[int],
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    backtests = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id.in_(backtest_ids),
-        Strategy.user_id == current_user.user_id,
-        Backtest.status == BacktestStatus.COMPLETED
-    ).all()
-    
-    if not backtests:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No completed backtests found for comparison",
+        return TradeAnalysisResponse(
+            backtest_id=backtest_id,
+            win_loss_distribution={"wins": 0, "losses": 0, "breakeven": 0},
+            pnl_distribution=[],
+            duration_distribution=[],
+            mae_mfe={"avg_mae": 0.0, "avg_mfe": 0.0},
+            consecutive={"max_wins": 0, "max_losses": 0},
         )
-    
-    comparison = []
-    for bt in backtests:
-        comparison.append({
-            "backtest_id": bt.backtest_id,
-            "strategy_id": bt.strategy_id,
-            "symbol": bt.symbol,
-            "timeframe": bt.timeframe.value if bt.timeframe else None,
-            "start_date": bt.start_date,
-            "end_date": bt.end_date,
-            "initial_capital": bt.initial_capital,
-            "final_capital": bt.final_capital,
-            "total_return": bt.total_return,
-            "net_profit": bt.net_profit,
-            "cagr": bt.cagr,
-            "sharpe_ratio": bt.sharpe_ratio,
-            "sortino_ratio": bt.sortino_ratio,
-            "calmar_ratio": bt.calmar_ratio,
-            "max_drawdown": bt.max_drawdown,
-            "win_rate": bt.win_rate,
-            "profit_factor": bt.profit_factor,
-            "total_trades": bt.total_trades,
-            "expectancy": bt.expectancy,
-        })
-    
-    return {"comparison": comparison}
+
+    pnls = [trade.pnl or 0.0 for trade in trades]
+    wins = sum(1 for pnl in pnls if pnl > 0)
+    losses = sum(1 for pnl in pnls if pnl < 0)
+
+    max_wins = max_losses = current_wins = current_losses = 0
+    for pnl in pnls:
+        if pnl > 0:
+            current_wins, current_losses = current_wins + 1, 0
+        elif pnl < 0:
+            current_wins, current_losses = 0, current_losses + 1
+        else:
+            current_wins = current_losses = 0
+        max_wins = max(max_wins, current_wins)
+        max_losses = max(max_losses, current_losses)
+
+    return TradeAnalysisResponse(
+        backtest_id=backtest_id,
+        win_loss_distribution={"wins": wins, "losses": losses, "breakeven": len(pnls) - wins - losses},
+        pnl_distribution=_histogram(pnls, bins=min(20, max(1, len(pnls)))),
+        duration_distribution=_histogram(
+            [trade.duration_bars for trade in trades], bins=min(20, max(1, len(trades))), integer=True
+        ),
+        mae_mfe={"avg_mae": 0.0, "avg_mfe": 0.0},
+        consecutive={"max_wins": max_wins, "max_losses": max_losses},
+    )
 
 
 @router.get("/{backtest_id}/export")
@@ -507,133 +417,52 @@ def export_backtest(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
-    
-    trades = db.query(Trade).filter(Trade.backtest_id == backtest_id).all()
-    
+    backtest = _get_owned_backtest(db, current_user, backtest_id)
+    trades = (
+        db.query(Trade)
+        .filter(Trade.backtest_id == backtest_id)
+        .order_by(Trade.entry_time.asc(), Trade.trade_id.asc())
+        .all()
+    )
+
+    trade_columns = [
+        "trade_id", "symbol", "side", "entry_time", "entry_price",
+        "exit_time", "exit_price", "quantity", "duration_bars", "pnl",
+    ]
+
+    def trade_row(trade: Trade) -> dict:
+        return {
+            "trade_id": trade.trade_id,
+            "symbol": trade.symbol,
+            "side": trade.side.value,
+            "entry_time": trade.entry_time.isoformat() if trade.entry_time else None,
+            "entry_price": trade.entry_price,
+            "exit_time": trade.exit_time.isoformat() if trade.exit_time else None,
+            "exit_price": trade.exit_price,
+            "quantity": trade.quantity,
+            "duration_bars": trade.duration_bars,
+            "pnl": trade.pnl,
+        }
+
     if format == "json":
-        data = {
-            "backtest": {
-                "backtest_id": backtest.backtest_id,
-                "strategy_id": backtest.strategy_id,
-                "status": backtest.status.value,
-                "start_date": backtest.start_date.isoformat() if backtest.start_date else None,
-                "end_date": backtest.end_date.isoformat() if backtest.end_date else None,
-                "initial_capital": backtest.initial_capital,
-                "symbol": backtest.symbol,
-                "timeframe": backtest.timeframe.value if backtest.timeframe else None,
-                "final_capital": backtest.final_capital,
-                "total_return": backtest.total_return,
-                "net_profit": backtest.net_profit,
-                "cagr": backtest.cagr,
-                "sharpe_ratio": backtest.sharpe_ratio,
-                "sortino_ratio": backtest.sortino_ratio,
-                "calmar_ratio": backtest.calmar_ratio,
-                "max_drawdown": backtest.max_drawdown,
-                "win_rate": backtest.win_rate,
-                "profit_factor": backtest.profit_factor,
-                "total_trades": backtest.total_trades,
-                "equity_curve": backtest.equity_curve,
-            },
-            "trades": [
-                {
-                    "trade_id": t.trade_id,
-                    "symbol": t.symbol,
-                    "side": t.side,
-                    "entry_time": t.entry_time.isoformat() if t.entry_time else None,
-                    "entry_price": t.entry_price,
-                    "exit_time": t.exit_time.isoformat() if t.exit_time else None,
-                    "exit_price": t.exit_price,
-                    "quantity": t.quantity,
-                    "duration_bars": t.duration_bars,
-                    "pnl": t.pnl,
-                }
-                for t in trades
-            ],
+        payload = {
+            "backtest": BacktestResponse.model_validate(backtest).model_dump(mode="json"),
+            "trades": [trade_row(trade) for trade in trades],
         }
         return StreamingResponse(
-            io.BytesIO(json.dumps(data, indent=2).encode()),
+            io.BytesIO(json.dumps(payload, indent=2).encode()),
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=backtest_{backtest_id}.json"}
+            headers={"Content-Disposition": f"attachment; filename=backtest_{backtest_id}.json"},
         )
-    
+
     output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["trade_id", "symbol", "side", "entry_time", "entry_price", "exit_time", "exit_price", "quantity", "duration_bars", "pnl"])
-    for t in trades:
-        writer.writerow([
-            t.trade_id, t.symbol, t.side,
-            t.entry_time.isoformat() if t.entry_time else "",
-            t.entry_price,
-            t.exit_time.isoformat() if t.exit_time else "",
-            t.exit_price, t.quantity, t.duration_bars, t.pnl
-        ])
-    
+    writer = csv.DictWriter(output, fieldnames=trade_columns)
+    writer.writeheader()
+    for trade in trades:
+        writer.writerow(trade_row(trade))
+
     return StreamingResponse(
         io.BytesIO(output.getvalue().encode()),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=backtest_{backtest_id}_trades.csv"}
+        headers={"Content-Disposition": f"attachment; filename=backtest_{backtest_id}_trades.csv"},
     )
-
-
-@router.get("/{backtest_id}/status")
-def get_backtest_status(
-    backtest_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
-    
-    return {
-        "backtest_id": backtest_id,
-        "status": backtest.status.value,
-        "started_at": backtest.started_at.isoformat() if backtest.started_at else None,
-        "completed_at": backtest.completed_at.isoformat() if backtest.completed_at else None,
-        "error_message": backtest.error_message,
-    }
-
-
-@router.post("/{backtest_id}/cancel")
-def cancel_backtest(
-    backtest_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    backtest = db.query(Backtest).join(Strategy).filter(
-        Backtest.backtest_id == backtest_id,
-        Strategy.user_id == current_user.user_id,
-    ).first()
-    if not backtest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backtest not found",
-        )
-    
-    if backtest.status != BacktestStatus.RUNNING:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Can only cancel running backtests",
-        )
-    
-    backtest.status = BacktestStatus.FAILED
-    backtest.error_message = "Cancelled by user"
-    backtest.completed_at = datetime.now()
-    db.commit()
-    
-    return {"backtest_id": backtest_id, "status": BacktestStatus.FAILED.value, "message": "Backtest cancelled"}

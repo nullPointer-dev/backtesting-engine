@@ -1,40 +1,36 @@
+"""Set up the database schema and load market data.
+
+    python main.py            # migrate, then download full history for every symbol
+    python main.py --update   # migrate, then fetch only new bars
+"""
 import argparse
+from pathlib import Path
 
-from app.core.database import engine
-from app.models import Base
-from app.ingestion.download_market_data import (
-    full_load,
-    incremental_update
-)
+from alembic import command
+from alembic.config import Config
+
+from app.ingestion.download_market_data import full_load, incremental_update
 
 
-def init_db():
-    Base.metadata.create_all(bind=engine)
+def migrate():
+    config = Config(str(Path(__file__).with_name("alembic.ini")))
+    command.upgrade(config, "head")
 
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(
-        description="Setup DB and load market data"
-    )
-
-    parser.add_argument(
-        "--update",
-        action="store_true",
-        help="Incremental daily update of market data"
-    )
-
+    parser = argparse.ArgumentParser(description="Set up the database and load market data")
+    parser.add_argument("--update", action="store_true", help="Incremental update of market data")
+    parser.add_argument("--migrate-only", action="store_true", help="Apply migrations and exit")
     args = parser.parse_args()
 
-    init_db()
-    print("Database tables created.")
+    migrate()
+    print("Database schema is up to date.")
 
-    if args.update:
-
+    if args.migrate_only:
+        pass
+    elif args.update:
         incremental_update()
         print("\nIncremental market data update complete.")
-
     else:
-
         full_load()
         print("\nMarket data seeding complete.")

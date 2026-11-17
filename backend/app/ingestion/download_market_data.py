@@ -27,6 +27,9 @@ from app.enums.types import (
 )
 
 
+SLIDING_WINDOW_TIMEFRAMES = {"1m", "5m", "15m", "30m", "60m"}
+
+
 def download_and_store(
     symbol: str,
     timeframe: str,
@@ -162,9 +165,14 @@ def incremental_update():
                         start=start
                     )
 
-                if inserted > 0:
+                if inserted > 0 and timeframe in SLIDING_WINDOW_TIMEFRAMES:
+                    # Intraday data is kept as a fixed-size window: Yahoo only
+                    # serves recent intraday bars, so the table would otherwise
+                    # grow without bound. Daily/weekly history is never deleted.
                     delete_oldest_rows(symbol, timeframe, inserted)
                     print(f"    Inserted {inserted} new rows, deleted {inserted} oldest rows")
+                elif inserted > 0:
+                    print(f"    Inserted {inserted} new rows")
 
                 print(
                     f"[OK] {timeframe}"

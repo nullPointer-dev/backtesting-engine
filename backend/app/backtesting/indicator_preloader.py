@@ -1,77 +1,53 @@
+import numpy as np
+import pandas as pd
+
 from app.strategy_engine.indicator_cache import IndicatorCache
-from app.strategy_engine.indicator_registry import INDICATOR_REGISTRY
+from app.strategy_engine.indicator_registry import (
+    INDICATOR_REGISTRY,
+    resolve_params,
+    to_function_kwargs,
+)
 from app.strategy_engine.requirement_extractor import RequirementExtractor
 from app.strategy_engine.schemas.strategy_definition import StrategyDefinition
 
 
 class IndicatorPreloader:
-    def __init__(
-        self,
-        dataframe,
-        strategy: StrategyDefinition
-    ):
+    """Computes every indicator a strategy needs once, over the whole price series."""
+
+    def __init__(self, dataframe: pd.DataFrame, strategy: StrategyDefinition):
         self.dataframe = dataframe
         self.strategy = strategy
 
-    def preload(self):
+    def preload(self) -> IndicatorCache:
         cache = IndicatorCache()
-        requirements = (RequirementExtractor().extract(self.strategy))
-        for indicator, params_tuple in requirements:
-            params = dict(params_tuple)
-            metadata = (INDICATOR_REGISTRY[indicator])
-            function = metadata["function"]
-            translated_params = (
-                self._translate_params(
-                    params,
-                    metadata["param_mapping"]
-                )
-            )
+        requirements = RequirementExtractor().extract(self.strategy)
 
-            result = (self._compute_indicator(metadata, function, translated_params))
-            cache.set(
-                indicator=indicator,
-                params=params,
-                series=result
-            )
+        for name, params_tuple in requirements:
+            params = dict(params_tuple)
+            indicator = INDICATOR_REGISTRY.get(name)
+            if indicator is None:
+                raise ValueError(f"Unknown indicator '{name}'")
+
+            kwargs = to_function_kwargs(indicator, resolve_params(indicator, params))
+            series = self._compute(indicator, kwargs)
+            cache.set(indicator=name, params=params, series=series)
 
         return cache
 
-    def _translate_params(
-        self,
-        params,
-        mapping
-    ):
+    def _compute(self, indicator, kwargs) -> pd.Series:
+        arguments = [self.dataframe[column] for column in indicator.price_columns]
+        result = indicator.function(*arguments, **kwargs)
 
-        translated = {}
-        for key, value in (params.items()):
-            translated[mapping.get(key, key)] = value
+        # pandas_ta returns None when there are fewer bars than the lookback
+        # needs. Treat that as "no value yet" on every bar.
+        if result is None:
+            return pd.Series(np.nan, index=self.dataframe.index)
 
-        return translated
+        if indicator.column_prefix is None:
+            return result.reindex(self.dataframe.index)
 
-    def _compute_indicator(
-        self,
-        metadata,
-        function,
-        params
-    ):
+        for column in result.columns:
+            if column.startswith(indicator.column_prefix):
+                return result[column].reindex(self.dataframe.index)
 
-        arguments = []
-        for column in (metadata["price_columns"]):
-            arguments.append(self.dataframe[column])
-
-        result = function(*arguments,**params)
-        column_prefix = (metadata["column_prefix"])
-
-        if column_prefix is None:
-            return result
-
-        for column in (result.columns):
-
-            if column.startswith(column_prefix):
-                return result[column]
-
-        raise ValueError(
-            f"Could not find column "
-            f"starting with "
-            f"{column_prefix}"
-        )
+        raise ValueError(f"Could not find column starting with {indicator.column_prefix}")
