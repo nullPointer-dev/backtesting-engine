@@ -12,7 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
-from app.backtesting.backtest_runner import BacktestRunner
+from app.backtesting.job_queue import submit_backtest
 from app.core.database import get_db
 from app.enums.types import BacktestStatus
 from app.models.backtest import Backtest
@@ -97,10 +97,6 @@ def _average_excursions(trades: list[Trade]) -> dict[str, float]:
         "avg_mae": float(np.mean(mae)) if mae else 0.0,
         "avg_mfe": float(np.mean(mfe)) if mfe else 0.0,
     }
-
-
-def run_backtest_job(backtest_id: int):
-    BacktestRunner(backtest_id=backtest_id).run()
 
 
 # --------------------------------------------------------------------------
@@ -274,7 +270,7 @@ def run_backtest(
     backtest.error_message = None
     db.commit()
 
-    background_tasks.add_task(run_backtest_job, backtest_id)
+    submit_backtest(backtest_id, background_tasks)
 
     return BacktestRunResponse(
         backtest_id=backtest_id,
